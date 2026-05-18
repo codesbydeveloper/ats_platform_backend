@@ -1,6 +1,21 @@
+const fs = require('fs');
 const path = require('path');
 const XLSX = require('xlsx');
 const pool = require('../config/database');
+const { logActivity } = require('../lib/activityLog');
+
+async function logTeacherCreated(f, resume_path, teacherId) {
+  await logActivity(`New teacher created – ${f.name}`, {
+    entityType: 'teacher',
+    entityId: teacherId,
+  });
+  if (resume_path) {
+    await logActivity(`Resume uploaded – ${f.name}`, {
+      entityType: 'teacher',
+      entityId: teacherId,
+    });
+  }
+}
 
 const REQUIRED = ['name', 'mobile', 'email'];
 
@@ -266,9 +281,11 @@ async function createTeacher(req, res) {
       TEACHER_INSERT_SQL,
       teacherInsertValues(f, resume_path, resume_original_name)
     );
+    const teacherId = result.insertId;
+    await logTeacherCreated(f, resume_path, teacherId);
     return res.status(201).json({
-      id: result.insertId,
-      teacher_id: `TCH-${String(result.insertId).padStart(5, '0')}`,
+      id: teacherId,
+      teacher_id: `TCH-${String(teacherId).padStart(5, '0')}`,
       ...f,
       experience_years: f.total_experience,
       resume_path,
@@ -446,6 +463,18 @@ async function updateTeacher(req, res) {
       id,
     ]);
 
+    if (req.file) {
+      await logActivity(`Resume uploaded – ${f.name}`, {
+        entityType: 'teacher',
+        entityId: id,
+      });
+    } else {
+      await logActivity(`Teacher updated – ${f.name}`, {
+        entityType: 'teacher',
+        entityId: id,
+      });
+    }
+
     return res.json(teacherPublicShape(id, f, resume_path, resume_original_name));
   } catch (err) {
     if (err.code === 'ER_NO_SUCH_TABLE') {
@@ -470,12 +499,27 @@ async function deleteTeacher(req, res) {
   }
 
   try {
+    const [rows] = await pool.execute(
+      'SELECT name FROM teachers WHERE id = ? LIMIT 1',
+      [id]
+    );
+    if (!rows.length) {
+      return res.status(404).json({ error: 'Teacher not found' });
+    }
+    const teacherName = rows[0].name;
+
     const [result] = await pool.execute('DELETE FROM teachers WHERE id = ?', [
       id,
     ]);
     if (result.affectedRows === 0) {
       return res.status(404).json({ error: 'Teacher not found' });
     }
+
+    await logActivity(`Teacher deleted – ${teacherName}`, {
+      entityType: 'teacher',
+      entityId: id,
+    });
+
     return res.json({
       ok: true,
       id,
@@ -526,9 +570,17 @@ async function bulkDeleteTeachers(req, res) {
       `DELETE FROM teachers WHERE id IN (${placeholders})`,
       ids
     );
+    const deleted = result.affectedRows;
+    if (deleted > 0) {
+      await logActivity(
+        deleted === 1
+          ? '1 teacher deleted'
+          : `${deleted} teachers deleted`
+      );
+    }
     return res.json({
       ok: true,
-      deleted: result.affectedRows,
+      deleted,
       requested: ids.length,
     });
   } catch (err) {
@@ -863,6 +915,65 @@ async function getTeacherById(req, res) {
   }
 }
 
+async function downloadTeacherResume(req, res) {
+  const id = parseInt(String(req.params.id), 10);
+  if (!Number.isFinite(id) || id < 1) {
+    return res.status(400).json({ error: 'Invalid teacher id' });
+  }
+
+  try {
+    const [rows] = await pool.execute(
+      'SELECT name, resume_path, resume_original_name FROM teachers WHERE id = ? LIMIT 1',
+      [id]
+    );
+    if (!rows.length) {
+      return res.status(404).json({ error: 'Teacher not found' });
+    }
+
+    const resume_path = rows[0].resume_path;
+    if (!resume_path || String(resume_path).trim() === '') {
+      return res.status(404).json({ error: 'Resume is not uploaded' });
+    }
+
+    const relative = String(resume_path).replace(/^\/+/, '').replace(/\\/g, '/');
+    const filePath = path.join(__dirname, '../../', relative);
+
+    if (!fs.existsSync(filePath)) {
+      return res.status(404).json({
+        error: 'Resume is not uploaded',
+        detail: 'File missing on server',
+      });
+    }
+
+    const downloadName =
+      rows[0].resume_original_name ||
+      path.basename(filePath) ||
+      'resume';
+
+    const teacherName = rows[0].name || 'Teacher';
+    await logActivity(`Resume downloaded – ${teacherName}`, {
+      entityType: 'teacher',
+      entityId: id,
+    });
+
+    return res.download(filePath, downloadName, (err) => {
+      if (err) {
+        if (!res.headersSent) {
+          return res.status(500).json({ error: 'Could not download resume' });
+        }
+      }
+    });
+  } catch (err) {
+    if (err.code === 'ER_NO_SUCH_TABLE') {
+      return res.status(503).json({
+        error: 'Database not ready. Run: npm run migrate',
+      });
+    }
+    console.error(err);
+    return res.status(500).json({ error: 'Server error' });
+  }
+}
+
 async function listTeachers(req, res) {
   try {
     const page = Math.max(1, parseInt(String(req.query.page || '1'), 10) || 1);
@@ -1079,6 +1190,14 @@ async function importTeachersFromExcel(req, res) {
       }
     }
 
+    if (summary.created > 0) {
+      await logActivity(
+        summary.created === 1
+          ? '1 teacher imported from Excel file'
+          : `${summary.created} teachers imported from Excel file`
+      );
+    }
+
     return res.json(summary);
   } catch (err) {
     if (err.code === 'ER_NO_SUCH_TABLE') {
@@ -1095,6 +1214,7 @@ module.exports = {
   createTeacher,
   listTeachers,
   getTeacherById,
+  downloadTeacherResume,
   updateTeacher,
   deleteTeacher,
   importTeachersFromExcel,

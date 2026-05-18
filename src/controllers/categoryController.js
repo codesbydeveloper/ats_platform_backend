@@ -1,4 +1,5 @@
 const pool = require('../config/database');
+const { logActivity } = require('../lib/activityLog');
 
 function toName(v) {
   if (v == null) return '';
@@ -39,6 +40,16 @@ async function createCategory(req, res) {
       sub_items.push({ id: subIns.insertId, name: s });
     }
     await conn.commit();
+    await logActivity(`New category created – ${name}`, {
+      entityType: 'category',
+      entityId: parentId,
+    });
+    for (const sub of sub_items) {
+      await logActivity(`New sub-item added – ${sub.name}`, {
+        entityType: 'category',
+        entityId: sub.id,
+      });
+    }
     return res.status(201).json({
       id: parentId,
       name,
@@ -82,6 +93,10 @@ async function createSubcategory(req, res) {
       'INSERT INTO categories (name, parent_id) VALUES (?, ?)',
       [name, parentId]
     );
+    await logActivity(`New sub-item added – ${name}`, {
+      entityType: 'category',
+      entityId: result.insertId,
+    });
     return res.status(201).json({
       id: result.insertId,
       name,
@@ -255,7 +270,7 @@ async function updateCategory(req, res) {
 
   try {
     const [existing] = await pool.execute(
-      'SELECT id, parent_id FROM categories WHERE id = ? LIMIT 1',
+      'SELECT id, parent_id, name AS old_name FROM categories WHERE id = ? LIMIT 1',
       [id]
     );
     if (!existing.length) {
@@ -265,6 +280,10 @@ async function updateCategory(req, res) {
     await pool.execute('UPDATE categories SET name = ? WHERE id = ?', [name, id]);
 
     const isSub = existing[0].parent_id != null;
+    await logActivity(
+      isSub ? `Sub-item updated – ${name}` : `Category updated – ${name}`,
+      { entityType: 'category', entityId: id }
+    );
     return res.json({
       id,
       name,
@@ -289,7 +308,7 @@ async function deleteCategory(req, res) {
 
   try {
     const [existing] = await pool.execute(
-      'SELECT id, parent_id FROM categories WHERE id = ? LIMIT 1',
+      'SELECT id, parent_id, name FROM categories WHERE id = ? LIMIT 1',
       [id]
     );
     if (!existing.length) {
@@ -297,6 +316,7 @@ async function deleteCategory(req, res) {
     }
 
     const isSub = existing[0].parent_id != null;
+    const catName = existing[0].name;
 
     const [result] = await pool.execute('DELETE FROM categories WHERE id = ?', [
       id,
@@ -304,6 +324,13 @@ async function deleteCategory(req, res) {
     if (result.affectedRows === 0) {
       return res.status(404).json({ error: 'Category not found' });
     }
+
+    await logActivity(
+      isSub
+        ? `Sub-item deleted – ${catName}`
+        : `Category deleted – ${catName}`,
+      { entityType: 'category', entityId: id }
+    );
     return res.json({
       ok: true,
       id,

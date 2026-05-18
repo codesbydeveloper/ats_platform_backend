@@ -6,6 +6,7 @@ const {
   createTeacher,
   listTeachers,
   getTeacherById,
+  downloadTeacherResume,
   updateTeacher,
   deleteTeacher,
   importTeachersFromExcel,
@@ -50,6 +51,7 @@ router.get('/', listTeachers);
 router.get('/export', exportTeachers);
 router.post('/export', exportTeachers);
 router.post('/bulk-delete', bulkDeleteTeachers);
+router.get('/:id/resume/download', downloadTeacherResume);
 router.get('/:id', getTeacherById);
 router.post('/', maybeResumeUpload, createTeacher);
 router.post('/import', uploadExcel.single('file'), importTeachersFromExcel);
