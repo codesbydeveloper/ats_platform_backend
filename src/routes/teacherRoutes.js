@@ -13,6 +13,7 @@ const {
   exportTeachers,
   bulkDeleteTeachers,
 } = require('../controllers/teacherController');
+const { parseResume } = require('../controllers/resumeParserController');
 
 const uploadDir = path.join(__dirname, '../../uploads');
 fs.mkdirSync(uploadDir, { recursive: true });
@@ -45,7 +46,14 @@ const uploadExcel = multer({
   limits: { fileSize: 15 * 1024 * 1024 },
 });
 
+const uploadResumeMem = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 10 * 1024 * 1024 },
+});
+
 const router = Router();
+
+router.post('/parse-resume', uploadResumeMem.single('resume'), parseResume);
 
 router.get('/', listTeachers);
 router.get('/export', exportTeachers);
