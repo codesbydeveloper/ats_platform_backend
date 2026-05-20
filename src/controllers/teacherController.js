@@ -61,48 +61,69 @@ function pickWorkExperienceInput(body) {
     body.workExperience,
     body.work_experiences && body.work_experiences.create,
     body.workExperiences && body.workExperiences.create,
-  ];
-  for (const list of lists) {
-    if (Array.isArray(list) && list.length > 0) return list;
-  }
-  return [];
+  ].filter((list) => Array.isArray(list) && list.length > 0);
+  if (lists.length === 0) return [];
+  return lists.reduce((best, cur) =>
+    cur.length > best.length ? cur : best
+  );
+}
+
+function pickAdditionalEducationInput(body) {
+  if (!body || typeof body !== 'object') return [];
+  const hasField =
+    Object.prototype.hasOwnProperty.call(body, 'additional_education') ||
+    Object.prototype.hasOwnProperty.call(body, 'additionalEducation') ||
+    Object.prototype.hasOwnProperty.call(body, 'education_extras') ||
+    Object.prototype.hasOwnProperty.call(body, 'extra_education');
+  if (!hasField) return null;
+  return toStringArray(
+    body.additional_education ??
+      body.additionalEducation ??
+      body.education_extras ??
+      body.extra_education
+  );
 }
 
 function normalizeWorkExperience(v) {
   if (!Array.isArray(v)) return [];
-  return v.map((row) => {
-    const school_name = toStr(
-      row.school_name ??
-        row.schoolName ??
-        row.organization_name ??
-        row.organizationName
-    );
-    const role = toStr(row.role);
-    const fromSrc =
-      row.from_date ?? row.from ?? row.duration_from ?? row.durationFrom;
-    const from_date =
-      fromSrc != null && String(fromSrc).trim() !== ''
-        ? String(fromSrc).trim()
-        : '';
-    const toSrc = row.to_date ?? row.to ?? row.duration_to ?? row.durationTo;
-    const to_date =
-      toSrc != null && String(toSrc).trim() !== ''
-        ? String(toSrc).trim()
-        : null;
-    const is_currently_working = Boolean(
-      row.is_currently_working ??
-        row.is_current ??
-        row.currently_working ??
-        row.currentlyWorking
-    );
-    return {
-      school_name,
-      role,
-      from_date,
-      to_date,
-      is_currently_working,
-    };
-  });
+  return v
+    .map((row) => {
+      const school_name = toStr(
+        row.school_name ??
+          row.schoolName ??
+          row.organization_name ??
+          row.organizationName
+      );
+      const role = toStr(row.role);
+      const fromSrc =
+        row.from_date ?? row.from ?? row.duration_from ?? row.durationFrom;
+      const fromVal =
+        fromSrc != null && String(fromSrc).trim() !== ''
+          ? String(fromSrc).trim()
+          : '';
+      const toSrc = row.to_date ?? row.to ?? row.duration_to ?? row.durationTo;
+      const toVal =
+        toSrc != null && String(toSrc).trim() !== ''
+          ? String(toSrc).trim()
+          : null;
+      const currentlyWorking = Boolean(
+        row.is_currently_working ??
+          row.is_current ??
+          row.currently_working ??
+          row.currentlyWorking
+      );
+      return {
+        school_name,
+        role,
+        from: fromVal,
+        to: toVal,
+        from_date: fromVal,
+        to_date: toVal,
+        currently_working: currentlyWorking,
+        is_currently_working: currentlyWorking,
+      };
+    })
+    .filter((row) => row.school_name || row.role);
 }
 
 const MULTIPART_SCALAR_FIELDS = [
@@ -170,6 +191,27 @@ function buildBodyFromFlatMultipart(body) {
     }
   }
 
+  const extraEdu =
+    body.additional_education ?? body.additionalEducation;
+  if (extraEdu != null && String(extraEdu).trim() !== '') {
+    const raw = String(extraEdu).trim();
+    try {
+      const parsed = JSON.parse(raw);
+      if (!Array.isArray(parsed)) {
+        return {
+          success: false,
+          error: 'additional_education must be a JSON array of strings',
+        };
+      }
+      out.additional_education = parsed;
+    } catch {
+      return {
+        success: false,
+        error: 'additional_education must be valid JSON (array of strings)',
+      };
+    }
+  }
+
   return { success: true, data: out };
 }
 
@@ -210,6 +252,7 @@ function normalizeStatus(v) {
 }
 
 function fieldsFromTeacherBody(body) {
+  const additionalEducation = pickAdditionalEducationInput(body);
   return {
     name: toStr(body.name),
     mobile: toStr(body.mobile),
@@ -222,6 +265,10 @@ function fieldsFromTeacherBody(body) {
     qualification: toStr(body.qualification),
     certifications:
       body.certifications != null ? String(body.certifications) : '',
+    additional_education:
+      additionalEducation != null
+        ? additionalEducation
+        : parseStoredJsonArray(body.additional_education),
     subject_taught: toStr(body.subject_taught),
     boards_taught: toStringArray(body.boards_taught),
     grades_taught: toStringArray(body.grades_taught),
@@ -363,6 +410,7 @@ function rowToPatchBase(row) {
     qualification: row.qualification,
     certifications:
       row.certifications != null ? String(row.certifications) : '',
+    additional_education: parseStoredJsonArray(row.additional_education),
     subject_taught: row.subject_taught,
     boards_taught: parseStoredJsonArray(row.boards_taught),
     grades_taught: parseStoredJsonArray(row.grades_taught),
@@ -428,6 +476,7 @@ async function updateTeacher(req, res) {
     const sql = `UPDATE teachers SET
     name=?, mobile=?, email=?, state=?, city=?, address=?,
     ug_college=?, pg_university=?, qualification=?, certifications=?,
+    additional_education=?,
     subject_taught=?, boards_taught=?, grades_taught=?, teacher_roles=?,
     current_location=?, preferred_location=?, area_of_interest=?,
     current_salary=?, total_experience=?, work_experience=?, skills=?,
@@ -445,6 +494,7 @@ async function updateTeacher(req, res) {
       f.pg_university,
       f.qualification,
       f.certifications,
+      JSON.stringify(f.additional_education),
       f.subject_taught,
       JSON.stringify(f.boards_taught),
       JSON.stringify(f.grades_taught),
@@ -687,6 +737,7 @@ function mapTeacherRow(row) {
     pg_university: row.pg_university,
     qualification: row.qualification,
     certifications: row.certifications,
+    additional_education: parseStoredJsonArray(row.additional_education),
     subject_taught: row.subject_taught,
     current_location: row.current_location,
     preferred_location: row.preferred_location,
@@ -1021,12 +1072,12 @@ async function listTeachers(req, res) {
 
 const TEACHER_INSERT_SQL = `INSERT INTO teachers (
   name, mobile, email, state, city, address,
-  ug_college, pg_university, qualification, certifications,
+  ug_college, pg_university, qualification, certifications, additional_education,
   subject_taught, boards_taught, grades_taught, teacher_roles,
   current_location, preferred_location, area_of_interest,
   current_salary, total_experience, work_experience, skills,
   internal_notes, resume_path, status, resume_original_name
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
 
 function excelCellStr(v) {
   if (v == null || v === '') return '';
@@ -1097,6 +1148,7 @@ function teacherInsertValues(f, resume_path, resume_original_name) {
     f.pg_university,
     f.qualification,
     f.certifications,
+    JSON.stringify(f.additional_education),
     f.subject_taught,
     JSON.stringify(f.boards_taught),
     JSON.stringify(f.grades_taught),
