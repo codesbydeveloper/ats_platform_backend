@@ -1,0 +1,124 @@
+const mammoth = require('mammoth');
+const pdfParse = require('pdf-parse');
+const OpenAI = require('openai');
+
+let _openai;
+function getOpenAI() {
+  if (!_openai) _openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+  return _openai;
+}
+
+const SYSTEM_PROMPT = `You are a resume parser. Extract structured data from the resume text and return ONLY a valid JSON object — no markdown, no explanation.
+
+Use this exact schema (omit fields you cannot find, use null for missing scalar fields, empty arrays [] for missing arrays):
+
+{
+  "name": string,
+  "mobile": string,
+  "email": string,
+  "state": string,
+  "city": string,
+  "address": string,
+  "ugCollege": string,
+  "pgUniversity": string,
+  "qualification": string,
+  "certifications": string,
+  "subject": string,
+  "boards": string[],
+  "grades": string[],
+  "roles": string[],
+  "currentLocation": string,
+  "preferredLocation": string,
+  "areaOfInterest": string,
+  "currentSalary": number | null,
+  "experienceYears": number | null,
+  "status": "active",
+  "skills": string[],
+  "notes": string,
+  "workHistory": [
+    {
+      "id": "work-temp-<N>",
+      "schoolName": string,
+      "role": string,
+      "from": "YYYY-MM-DD" | null,
+      "to": "YYYY-MM-DD" | null,
+      "currentlyWorking": boolean
+    }
+  ]
+}`;
+
+function resolveType(mimetype, originalname) {
+  if (
+    mimetype === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' ||
+    mimetype === 'application/msword' ||
+    /\.docx?$/i.test(originalname || '')
+  ) return 'docx';
+
+  if (
+    mimetype === 'application/pdf' ||
+    /\.pdf$/i.test(originalname || '')
+  ) return 'pdf';
+
+  return null;
+}
+
+async function extractText(buffer, mimetype, originalname) {
+  const type = resolveType(mimetype, originalname);
+
+  if (type === 'docx') {
+    const result = await mammoth.extractRawText({ buffer });
+    return result.value;
+  }
+
+  if (type === 'pdf') {
+    const result = await pdfParse(buffer);
+    return result.text;
+  }
+
+  throw new Error(`Unsupported file type: ${mimetype}`);
+}
+
+async function parseResume(req, res) {
+  if (!req.file) {
+    return res.status(400).json({ error: 'No file uploaded. Send a resume as multipart/form-data field "resume".' });
+  }
+
+  const { buffer, mimetype, originalname } = req.file;
+
+  let resumeText;
+  try {
+    resumeText = await extractText(buffer, mimetype, originalname);
+  } catch (err) {
+    return res.status(422).json({ error: err.message });
+  }
+
+  if (!resumeText || resumeText.trim().length < 20) {
+    return res.status(422).json({ error: 'Could not extract readable text from the file.' });
+  }
+
+  let parsed;
+  try {
+    const completion = await getOpenAI().chat.completions.create({
+      model: 'gpt-4o-mini',
+      temperature: 0,
+      messages: [
+        { role: 'system', content: SYSTEM_PROMPT },
+        { role: 'user', content: resumeText },
+      ],
+      response_format: { type: 'json_object' },
+    });
+
+    parsed = JSON.parse(completion.choices[0].message.content);
+  } catch (err) {
+    console.error('OpenAI error:', err);
+    return res.status(502).json({ error: 'AI parsing failed', detail: err.message });
+  }
+
+  return res.json({
+    ...parsed,
+    resumeFileName: originalname || null,
+    resumeMime: mimetype || null,
+  });
+}
+
+module.exports = { parseResume };
