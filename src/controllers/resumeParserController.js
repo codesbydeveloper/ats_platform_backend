@@ -2,9 +2,57 @@ const mammoth = require('mammoth');
 const pdfParse = require('pdf-parse');
 const OpenAI = require('openai');
 
+function getOpenAIKey() {
+  const key = process.env.OPENAI_API_KEY
+    ? String(process.env.OPENAI_API_KEY).trim().replace(/^['"]|['"]$/g, '')
+    : '';
+  return key;
+}
+
+function openAiClientError(err) {
+  const msg = err?.message ? String(err.message) : 'Unknown error';
+  const status = err?.status ?? err?.response?.status;
+
+  if (
+    status === 401 ||
+    /incorrect api key|invalid api key|authentication/i.test(msg)
+  ) {
+    return {
+      status: 503,
+      body: {
+        error: 'OpenAI API key is invalid or expired',
+        detail:
+          'Update OPENAI_API_KEY in your .env file with a new key from https://platform.openai.com/api-keys, then restart the server (npm run dev).',
+      },
+    };
+  }
+
+  if (/quota|billing|insufficient/i.test(msg)) {
+    return {
+      status: 503,
+      body: {
+        error: 'OpenAI account has no quota or billing issue',
+        detail: 'Check billing at https://platform.openai.com/account/billing',
+      },
+    };
+  }
+
+  return {
+    status: 502,
+    body: {
+      error: 'AI parsing failed',
+      detail: msg,
+    },
+  };
+}
+
 let _openai;
 function getOpenAI() {
-  if (!_openai) _openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+  const apiKey = getOpenAIKey();
+  if (!apiKey) {
+    throw new Error('OPENAI_API_KEY is missing in .env');
+  }
+  if (!_openai) _openai = new OpenAI({ apiKey });
   return _openai;
 }
 
@@ -96,6 +144,14 @@ async function parseResume(req, res) {
     return res.status(422).json({ error: 'Could not extract readable text from the file.' });
   }
 
+  if (!getOpenAIKey()) {
+    return res.status(503).json({
+      error: 'Resume AI parsing is not configured',
+      detail:
+        'Add OPENAI_API_KEY to .env (see .env.example), then restart the server.',
+    });
+  }
+
   let parsed;
   try {
     const completion = await getOpenAI().chat.completions.create({
@@ -111,7 +167,8 @@ async function parseResume(req, res) {
     parsed = JSON.parse(completion.choices[0].message.content);
   } catch (err) {
     console.error('OpenAI error:', err);
-    return res.status(502).json({ error: 'AI parsing failed', detail: err.message });
+    const mapped = openAiClientError(err);
+    return res.status(mapped.status).json(mapped.body);
   }
 
   return res.json({

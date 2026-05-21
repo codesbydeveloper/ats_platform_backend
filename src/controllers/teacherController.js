@@ -3,6 +3,20 @@ const path = require('path');
 const XLSX = require('xlsx');
 const pool = require('../config/database');
 const { logActivity } = require('../lib/activityLog');
+const {
+  resolveExternalResumeDownload,
+  looksLikeHtml,
+} = require('../lib/externalResumeDownload');
+const { buildTeacherListWhere } = require('../lib/teacherListFilters');
+const {
+  EXCEL_HEADERS,
+  EXPORT_EMPTY_ROW,
+  teacherRowToExcelExport,
+  bodyFromExcelRow,
+  enrichRowsWithResumeLinks,
+  parseResumeImportValue,
+  isHttpUrl,
+} = require('../lib/teacherExcelFormat');
 
 async function logTeacherCreated(f, resume_path, teacherId) {
   await logActivity(`New teacher created – ${f.name}`, {
@@ -42,7 +56,7 @@ function toStringArray(v) {
       }
     }
     return t
-      .split(',')
+      .split(/[,;]/)
       .map((s) => s.trim())
       .filter(Boolean);
   }
@@ -710,12 +724,14 @@ function mapTeacherRow(row) {
 
   const resume_path = row.resume_path || null;
   const resumeOriginal = row.resume_original_name || null;
-  const resumeDisplay =
-    resumeOriginal ||
-    (resume_path
-      ? path.posix.basename(String(resume_path).replace(/\\/g, '/'))
-      : '') ||
-    '';
+  const pathStr = resume_path ? String(resume_path).trim() : '';
+  const resumeDisplay = isHttpUrl(pathStr)
+    ? resumeOriginal || pathStr
+    : resumeOriginal ||
+      (pathStr
+        ? path.posix.basename(String(pathStr).replace(/\\/g, '/'))
+        : '') ||
+      '';
 
   return {
     teacher_id: formatTeacherCode(row.id),
@@ -761,42 +777,6 @@ function mapTeacherRow(row) {
   };
 }
 
-function teacherDbRowToImportShape(row) {
-  const boards = jsonToArray(row.boards_taught);
-  const grades = jsonToArray(row.grades_taught);
-  const roles = jsonToArray(row.teacher_roles);
-  const exp =
-    row.total_experience != null && row.total_experience !== ''
-      ? Number(row.total_experience)
-      : '';
-  return {
-    name: row.name,
-    email: row.email,
-    mobile: row.mobile,
-    city: row.city || '',
-    state: row.state || '',
-    subject: row.subject_taught || '',
-    roles: roles.join(', '),
-    grades: grades.join(', '),
-    boards: boards.join(', '),
-    experienceYears: exp,
-    status: row.status || 'active',
-  };
-}
-
-const EXPORT_EMPTY_ROW = {
-  name: '',
-  email: '',
-  mobile: '',
-  city: '',
-  state: '',
-  subject: '',
-  roles: '',
-  grades: '',
-  boards: '',
-  experienceYears: '',
-  status: '',
-};
 
 function buildExportFilter(opts, scope) {
   const params = [];
@@ -886,14 +866,14 @@ async function exportTeachers(req, res) {
 
   try {
     const [rows] = await pool.query(sql, filter.params);
-    const data = rows.map((r) => teacherDbRowToImportShape(r));
+    const data = rows.map((r) => teacherRowToExcelExport(r));
     const rowsOut = data.length ? data : [EXPORT_EMPTY_ROW];
 
     const stamp = new Date().toISOString().slice(0, 10);
     const base = `teachers-${scope}-${stamp}`;
 
     if (format === 'csv') {
-      const ws = XLSX.utils.json_to_sheet(rowsOut);
+      const ws = XLSX.utils.json_to_sheet(rowsOut, { header: EXCEL_HEADERS });
       const csv = XLSX.utils.sheet_to_csv(ws);
       res.setHeader('Content-Type', 'text/csv; charset=utf-8');
       res.setHeader(
@@ -908,7 +888,7 @@ async function exportTeachers(req, res) {
     }
 
     const wb = XLSX.utils.book_new();
-    const ws = XLSX.utils.json_to_sheet(rowsOut);
+    const ws = XLSX.utils.json_to_sheet(rowsOut, { header: EXCEL_HEADERS });
     XLSX.utils.book_append_sheet(wb, ws, 'Teachers');
     const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
     res.setHeader(
@@ -986,7 +966,68 @@ async function downloadTeacherResume(req, res) {
       return res.status(404).json({ error: 'Resume is not uploaded' });
     }
 
-    const relative = String(resume_path).replace(/^\/+/, '').replace(/\\/g, '/');
+    const pathStr = String(resume_path).trim();
+    if (isHttpUrl(pathStr)) {
+      const teacherName = rows[0].name || 'Teacher';
+      const resolved = resolveExternalResumeDownload(
+        pathStr,
+        rows[0].resume_original_name || teacherName
+      );
+      if (!resolved) {
+        return res.status(400).json({
+          error: 'External resume link is not supported for download',
+          detail:
+            'Use a Google Docs/Drive sharing link or a direct file URL (.pdf, .docx).',
+          external_url: pathStr,
+        });
+      }
+
+      let upstream;
+      try {
+        upstream = await fetch(resolved.fetchUrl, { redirect: 'follow' });
+      } catch (err) {
+        console.error('external resume fetch failed', err);
+        return res.status(502).json({
+          error: 'Could not fetch resume from external link',
+        });
+      }
+
+      if (!upstream.ok) {
+        return res.status(502).json({
+          error: 'Could not fetch resume from external link',
+          detail: `Remote server returned ${upstream.status}`,
+          external_url: pathStr,
+        });
+      }
+
+      const buf = Buffer.from(await upstream.arrayBuffer());
+      if (looksLikeHtml(buf)) {
+        return res.status(502).json({
+          error: 'Resume is not publicly downloadable',
+          detail:
+            'Share the Google Doc as “Anyone with the link” can view, or upload the file on the teacher profile.',
+          external_url: pathStr,
+        });
+      }
+
+      const contentType =
+        upstream.headers.get('content-type')?.split(';')[0]?.trim() ||
+        resolved.contentType;
+
+      await logActivity(`Resume downloaded – ${teacherName}`, {
+        entityType: 'teacher',
+        entityId: id,
+      });
+
+      res.setHeader('Content-Type', contentType);
+      res.setHeader(
+        'Content-Disposition',
+        `attachment; filename="${resolved.filename.replace(/"/g, '')}"`
+      );
+      return res.send(buf);
+    }
+
+    const relative = pathStr.replace(/^\/+/, '').replace(/\\/g, '/');
     const filePath = path.join(__dirname, '../../', relative);
 
     if (!fs.existsSync(filePath)) {
@@ -1032,15 +1073,19 @@ async function listTeachers(req, res) {
     const limit = Math.min(100, Math.max(1, Number.isFinite(limitRaw) ? limitRaw : 10));
     const offset = (page - 1) * limit;
 
+    const { where, params } = buildTeacherListWhere(req.query);
+    const whereSql = `WHERE ${where}`;
+
     const [[countRow]] = await pool.execute(
-      'SELECT COUNT(*) AS total FROM teachers'
+      `SELECT COUNT(*) AS total FROM teachers ${whereSql}`,
+      params
     );
     const total = Number(countRow.total) || 0;
     const total_pages = total === 0 ? 0 : Math.ceil(total / limit);
 
     const [rows] = await pool.query(
-      'SELECT * FROM teachers ORDER BY id DESC LIMIT ? OFFSET ?',
-      [limit, offset]
+      `SELECT * FROM teachers ${whereSql} ORDER BY id DESC LIMIT ? OFFSET ?`,
+      [...params, limit, offset]
     );
     const teachers = rows.map((row) => mapTeacherRow(row));
 
@@ -1078,63 +1123,6 @@ const TEACHER_INSERT_SQL = `INSERT INTO teachers (
   current_salary, total_experience, work_experience, skills,
   internal_notes, resume_path, status, resume_original_name
 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
-
-function excelCellStr(v) {
-  if (v == null || v === '') return '';
-  if (typeof v === 'number' && Number.isFinite(v)) {
-    return String(v);
-  }
-  return String(v).trim();
-}
-
-function pickExcelColumn(row, candidates) {
-  const keys = Object.keys(row);
-  for (const want of candidates) {
-    const lw = want.toLowerCase();
-    const hit = keys.find((k) => k.trim().toLowerCase() === lw);
-    if (hit !== undefined) {
-      const val = excelCellStr(row[hit]);
-      if (val !== '') return val;
-    }
-  }
-  return '';
-}
-
-function bodyFromExcelRow(row) {
-  const name = pickExcelColumn(row, ['name']);
-  const email = pickExcelColumn(row, ['email']);
-  const mobile = pickExcelColumn(row, ['mobile', 'phone']);
-  if (!name && !email && !mobile) {
-    return null;
-  }
-
-  const subject = pickExcelColumn(row, ['subject', 'subject_taught']);
-  const roles = pickExcelColumn(row, ['roles', 'teacher_roles']);
-  const grades = pickExcelColumn(row, ['grades', 'grades_taught']);
-  const boards = pickExcelColumn(row, ['boards', 'boards_taught']);
-  const exp = pickExcelColumn(row, [
-    'experienceYears',
-    'experience_years',
-    'experience',
-    'expence',
-    'total_experience',
-  ]);
-  const status = pickExcelColumn(row, ['status']);
-
-  return {
-    name,
-    email,
-    mobile,
-    city: pickExcelColumn(row, ['city']),
-    state: pickExcelColumn(row, ['state']),
-    subject_taught: subject,
-    teacher_roles: roles,
-    grades_taught: grades,
-    boards_taught: boards,
-    experience_years: exp,
-    ...(status ? { status } : {}),
-  };
-}
 
 function teacherInsertValues(f, resume_path, resume_original_name) {
   return [
@@ -1194,10 +1182,11 @@ async function importTeachersFromExcel(req, res) {
   }
 
   const sheet = workbook.Sheets[sheetName];
-  const rawRows = XLSX.utils.sheet_to_json(sheet, {
+  let rawRows = XLSX.utils.sheet_to_json(sheet, {
     defval: '',
     raw: false,
   });
+  rawRows = enrichRowsWithResumeLinks(sheet, rawRows);
 
   const summary = {
     sheet: sheetName,
@@ -1205,9 +1194,6 @@ async function importTeachersFromExcel(req, res) {
     created: 0,
     failed: [],
   };
-
-  const resume_path = null;
-  const resume_original_name = null;
 
   try {
     for (let i = 0; i < rawRows.length; i++) {
@@ -1226,11 +1212,16 @@ async function importTeachersFromExcel(req, res) {
         continue;
       }
 
+      const resume = parseResumeImportValue(body.resume_link);
       const f = fieldsFromTeacherBody(body);
       try {
         await pool.execute(
           TEACHER_INSERT_SQL,
-          teacherInsertValues(f, resume_path, resume_original_name)
+          teacherInsertValues(
+            f,
+            resume.resume_path,
+            resume.resume_original_name
+          )
         );
         summary.created += 1;
       } catch (err) {
@@ -1263,6 +1254,7 @@ async function importTeachersFromExcel(req, res) {
 }
 
 module.exports = {
+  mapTeacherRow,
   createTeacher,
   listTeachers,
   getTeacherById,

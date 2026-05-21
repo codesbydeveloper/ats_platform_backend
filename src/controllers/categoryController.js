@@ -1,5 +1,14 @@
 const pool = require('../config/database');
 const { logActivity } = require('../lib/activityLog');
+const {
+  getLookupField,
+  LOOKUP_FIELDS,
+} = require('../lib/lookupFields');
+const {
+  getDistinctTeacherFieldValues,
+  buildTeacherFilterForLookup,
+} = require('../lib/lookupTeacherValues');
+const { mapTeacherRow } = require('./teacherController');
 
 function toName(v) {
   if (v == null) return '';
@@ -161,6 +170,132 @@ async function listAllCategories(req, res) {
     return res.json({
       count: categories.length,
       categories,
+    });
+  } catch (err) {
+    if (err.code === 'ER_NO_SUCH_TABLE') {
+      return res.status(503).json({
+        error: 'Database not ready. Run: npm run migrate',
+      });
+    }
+    console.error(err);
+    return res.status(500).json({ error: 'Server error' });
+  }
+}
+
+/**
+ * GET /api/categories/lookup/:slug/options?page=&limit=&q=
+ * Distinct values teachers filled for this field (e.g. each subject + how many teachers).
+ */
+async function listLookupFieldOptions(req, res) {
+  const field = getLookupField(req.params.slug);
+  if (!field) {
+    return res.status(400).json({
+      error: 'Invalid lookup field slug',
+      valid_slugs: LOOKUP_FIELDS.map((f) => f.slug),
+    });
+  }
+
+  const page = Math.max(1, parseInt(String(req.query.page || '1'), 10) || 1);
+  const limitRaw = parseInt(String(req.query.limit ?? '10'), 10);
+  const limit = Math.min(
+    100,
+    Math.max(1, Number.isFinite(limitRaw) ? limitRaw : 10)
+  );
+  const q = req.query.q != null ? String(req.query.q).trim() : '';
+
+  try {
+    const result = await getDistinctTeacherFieldValues(
+      field.slug,
+      page,
+      limit,
+      q
+    );
+    if (result.error) {
+      return res.status(400).json({ error: result.error });
+    }
+
+    const total = result.total ?? 0;
+    const total_pages = total === 0 ? 0 : Math.ceil(total / limit);
+
+    return res.json({
+      slug: field.slug,
+      field: field.label,
+      data_source: result.data_source ?? 'teachers',
+      page,
+      limit,
+      total,
+      total_pages,
+      has_next_page: page < total_pages,
+      has_prev_page: page > 1 && total > 0,
+      count: result.options.length,
+      options: result.options,
+    });
+  } catch (err) {
+    if (err.code === 'ER_NO_SUCH_TABLE') {
+      return res.status(503).json({
+        error: 'Database not ready. Run: npm run migrate',
+      });
+    }
+    console.error(err);
+    return res.status(500).json({ error: 'Server error' });
+  }
+}
+
+/**
+ * GET /api/categories/lookup/:slug/teachers?value=&page=&limit=
+ * Teachers who have the selected field value (e.g. subject = Global Politics).
+ */
+async function listLookupFieldTeachers(req, res) {
+  const field = getLookupField(req.params.slug);
+  if (!field) {
+    return res.status(400).json({
+      error: 'Invalid lookup field slug',
+      valid_slugs: LOOKUP_FIELDS.map((f) => f.slug),
+    });
+  }
+
+  const value = req.query.value ?? req.query.name;
+  const teacherId = req.query.teacher_id ?? req.query.teacherId;
+  const filter = buildTeacherFilterForLookup(field.slug, value, teacherId);
+  if (filter.error) {
+    return res.status(400).json({ error: filter.error });
+  }
+
+  const page = Math.max(1, parseInt(String(req.query.page || '1'), 10) || 1);
+  const limitRaw = parseInt(String(req.query.limit ?? '10'), 10);
+  const limit = Math.min(
+    100,
+    Math.max(1, Number.isFinite(limitRaw) ? limitRaw : 10)
+  );
+  const offset = (page - 1) * limit;
+
+  try {
+    const where = `WHERE ${filter.where}`;
+    const [[countRow]] = await pool.execute(
+      `SELECT COUNT(*) AS total FROM teachers ${where}`,
+      filter.params
+    );
+    const total = Number(countRow.total) || 0;
+    const total_pages = total === 0 ? 0 : Math.ceil(total / limit);
+
+    const [rows] = await pool.query(
+      `SELECT * FROM teachers ${where} ORDER BY id DESC LIMIT ? OFFSET ?`,
+      [...filter.params, limit, offset]
+    );
+    const teachers = rows.map((row) => mapTeacherRow(row));
+
+    return res.json({
+      slug: field.slug,
+      field: field.label,
+      value: String(value).trim(),
+      page,
+      limit,
+      total,
+      total_pages,
+      has_next_page: page < total_pages,
+      has_prev_page: page > 1 && total > 0,
+      count: teachers.length,
+      teachers,
     });
   } catch (err) {
     if (err.code === 'ER_NO_SUCH_TABLE') {
@@ -355,6 +490,8 @@ module.exports = {
   createSubcategory,
   listCategories,
   listAllCategories,
+  listLookupFieldOptions,
+  listLookupFieldTeachers,
   updateCategory,
   deleteCategory,
 };

@@ -8,6 +8,7 @@ const authRoutes = require('./src/routes/authRoutes');
 const teacherRoutes = require('./src/routes/teacherRoutes');
 const categoryRoutes = require('./src/routes/categoryRoutes');
 const dashboardRoutes = require('./src/routes/dashboardRoutes');
+const locationsRoutes = require('./src/routes/locationsRoutes');
 
 const PORT = Number(process.env.PORT) || 8000;
 const BASE_URL =
@@ -28,6 +29,7 @@ app.use('/api/auth', authRoutes);
 app.use('/api/teachers', teacherRoutes);
 app.use('/api/categories', categoryRoutes);
 app.use('/api/dashboard', dashboardRoutes);
+app.use('/api/locations', locationsRoutes);
 
 app.listen(PORT, () => {
   console.log(`server is running on ${PORT} `);
