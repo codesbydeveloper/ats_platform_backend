@@ -23,8 +23,21 @@ async function requireAuth(req, res, next) {
   let payload;
   try {
     payload = jwt.verify(token, secret);
-  } catch {
-    return res.status(401).json({ error: 'Invalid or expired token' });
+  } catch (err) {
+    if (err.name === 'TokenExpiredError') {
+      return res.status(401).json({
+        error: 'Token expired. Please sign in again.',
+        code: 'token_expired',
+      });
+    }
+    return res.status(401).json({
+      error: 'Invalid token. Please sign in again.',
+      code: 'token_invalid',
+      detail:
+        err.name === 'JsonWebTokenError'
+          ? 'Token was signed with a different secret or is malformed.'
+          : undefined,
+    });
   }
 
   const userId = payload.sub;
