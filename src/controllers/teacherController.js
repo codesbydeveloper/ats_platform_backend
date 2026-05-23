@@ -265,6 +265,38 @@ function normalizeStatus(v) {
   return 'active';
 }
 
+function parseCustomFields(body) {
+  const raw = body.custom_fields ?? body.customFields;
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    return {};
+  }
+  const out = {};
+  for (const [k, v] of Object.entries(raw)) {
+    const key = String(k).trim();
+    if (!key) continue;
+    out[key] = v;
+  }
+  return out;
+}
+
+function parseStoredCustomFields(val) {
+  if (val == null) return {};
+  if (typeof val === 'object' && !Array.isArray(val)) {
+    return parseCustomFields({ custom_fields: val });
+  }
+  if (typeof val === 'string') {
+    try {
+      const p = JSON.parse(val);
+      if (p && typeof p === 'object' && !Array.isArray(p)) {
+        return parseCustomFields({ custom_fields: p });
+      }
+    } catch {
+      return {};
+    }
+  }
+  return {};
+}
+
 function fieldsFromTeacherBody(body) {
   const additionalEducation = pickAdditionalEducationInput(body);
   return {
@@ -306,6 +338,7 @@ function fieldsFromTeacherBody(body) {
           ? String(body.notes)
           : '',
     status: normalizeStatus(body.status),
+    custom_fields: parseCustomFields(body),
   };
 }
 
@@ -351,6 +384,7 @@ async function createTeacher(req, res) {
       experience_years: f.total_experience,
       resume_path,
       resume_original_name,
+      custom_fields: f.custom_fields,
     });
   } catch (err) {
     if (err.code === 'ER_NO_SUCH_TABLE') {
@@ -439,6 +473,7 @@ function rowToPatchBase(row) {
     skills: parseStoredJsonArray(row.skills),
     internal_notes: row.internal_notes != null ? String(row.internal_notes) : '',
     status: row.status || 'active',
+    custom_fields: parseStoredCustomFields(row.custom_fields),
   };
 }
 
@@ -494,7 +529,7 @@ async function updateTeacher(req, res) {
     subject_taught=?, boards_taught=?, grades_taught=?, teacher_roles=?,
     current_location=?, preferred_location=?, area_of_interest=?,
     current_salary=?, total_experience=?, work_experience=?, skills=?,
-    internal_notes=?, resume_path=?, status=?, resume_original_name=?
+    internal_notes=?, resume_path=?, status=?, resume_original_name=?, custom_fields=?
     WHERE id=?`;
 
     await pool.execute(sql, [
@@ -524,6 +559,7 @@ async function updateTeacher(req, res) {
       resume_path,
       f.status,
       resume_original_name,
+      JSON.stringify(f.custom_fields || {}),
       id,
     ]);
 
@@ -770,6 +806,7 @@ function mapTeacherRow(row) {
     work_experience,
     skills,
     internal_notes: row.internal_notes,
+    custom_fields: parseStoredCustomFields(row.custom_fields),
     resume_path,
     resume_original_name: resumeOriginal,
     created_at: row.created_at,
@@ -1121,8 +1158,8 @@ const TEACHER_INSERT_SQL = `INSERT INTO teachers (
   subject_taught, boards_taught, grades_taught, teacher_roles,
   current_location, preferred_location, area_of_interest,
   current_salary, total_experience, work_experience, skills,
-  internal_notes, resume_path, status, resume_original_name
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+  internal_notes, resume_path, status, resume_original_name, custom_fields
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
 
 function teacherInsertValues(f, resume_path, resume_original_name) {
   return [
@@ -1152,6 +1189,7 @@ function teacherInsertValues(f, resume_path, resume_original_name) {
     resume_path,
     f.status,
     resume_original_name,
+    JSON.stringify(f.custom_fields || {}),
   ];
 }
 

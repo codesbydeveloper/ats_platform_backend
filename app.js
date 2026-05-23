@@ -9,6 +9,7 @@ const teacherRoutes = require('./src/routes/teacherRoutes');
 const categoryRoutes = require('./src/routes/categoryRoutes');
 const dashboardRoutes = require('./src/routes/dashboardRoutes');
 const locationsRoutes = require('./src/routes/locationsRoutes');
+const teacherFormRoutes = require('./src/routes/teacherFormRoutes');
 
 const PORT = Number(process.env.PORT) || 8000;
 const BASE_URL =
@@ -26,6 +27,7 @@ app.get('/', (req, res) => {
 
 app.use('/api/users', userRoutes);
 app.use('/api/auth', authRoutes);
+app.use('/api/teacher-form', teacherFormRoutes);
 app.use('/api/teachers', teacherRoutes);
 app.use('/api/categories', categoryRoutes);
 app.use('/api/dashboard', dashboardRoutes);
