@@ -36,14 +36,14 @@ const LOOKUP_FIELDS = [
     match: ['city wise', 'city', 'cities'],
   },
   {
-    slug: 'area-of-interest',
-    label: 'Area Of Interest',
-    match: ['area of interest', 'interest'],
-  },
-  {
     slug: 'teacher-roles',
     label: 'Teacher Roles',
     match: ['teacher roles', 'role'],
+  },
+  {
+    slug: 'area-of-interest',
+    label: 'Area Of Interest',
+    match: ['area of interest', 'area'],
   },
 ];
 

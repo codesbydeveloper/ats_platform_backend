@@ -8,14 +8,18 @@ function formatActivityTime(d) {
   return `${pad(dt.getDate())}/${pad(dt.getMonth() + 1)}/${dt.getFullYear()}, ${pad(dt.getHours())}:${pad(dt.getMinutes())}:${pad(dt.getSeconds())}`;
 }
 
+function formatTeacherCode(id) {
+  return `TCH-${String(id).padStart(5, '0')}`;
+}
+
 async function getDashboard(req, res) {
   const recentLimit = Math.min(
     20,
-    Math.max(1, parseInt(String(req.query.recent_limit ?? '4'), 10) || 4)
+    Math.max(1, parseInt(String(req.query.recent_limit ?? '10'), 10) || 10)
   );
   const activityLimit = Math.min(
     50,
-    Math.max(1, parseInt(String(req.query.activity_limit ?? '8'), 10) || 8)
+    Math.max(1, parseInt(String(req.query.activity_limit ?? '10'), 10) || 10)
   );
 
   try {
@@ -23,7 +27,7 @@ async function getDashboard(req, res) {
       SELECT
         COUNT(*) AS total_teachers,
         SUM(CASE WHEN status = 'active' THEN 1 ELSE 0 END) AS active_teachers,
-        COUNT(DISTINCT NULLIF(TRIM(subject_taught), '')) AS unique_subjects,
+        0 AS unique_subjects,
         SUM(CASE WHEN resume_path IS NOT NULL AND resume_path != '' THEN 1 ELSE 0 END) AS resumes_on_file
       FROM teachers
     `);
@@ -47,7 +51,7 @@ async function getDashboard(req, res) {
     }
 
     const [recentRows] = await pool.query(
-      `SELECT id, name, subject_taught, status, created_at
+      `SELECT id, name, status, created_at, subjects_taught
        FROM teachers
        ORDER BY created_at DESC
        LIMIT ?`,
@@ -55,10 +59,30 @@ async function getDashboard(req, res) {
     );
 
     const recent_teachers = recentRows.map((r) => ({
+      teacher_id: formatTeacherCode(r.id),
       id: r.id,
       name: r.name,
-      subject: r.subject_taught || '',
+      subject: (() => {
+        try {
+          const raw = r.subjects_taught;
+          const arr =
+            raw == null
+              ? []
+              : Array.isArray(raw)
+                ? raw
+                : typeof raw === 'string'
+                  ? JSON.parse(raw)
+                  : [];
+          return Array.isArray(arr)
+            ? arr.map((x) => String(x).trim()).filter(Boolean).join(', ')
+            : '';
+        } catch {
+          return '';
+        }
+      })(),
       status: r.status || 'active',
+      created_at: r.created_at,
+      time_label: formatActivityTime(r.created_at),
     }));
 
     let activity_logs = [];

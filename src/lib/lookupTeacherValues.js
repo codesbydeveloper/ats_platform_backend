@@ -4,12 +4,12 @@ const pool = require('../config/database');
 const TEACHER_FIELD_BY_SLUG = {
   'educational-qualification': { column: 'qualification', type: 'scalar' },
   'qualification-certification': { column: 'certifications', type: 'scalar' },
-  'subjects-taught': { column: 'subject_taught', type: 'scalar' },
+  'subjects-taught': { column: 'subjects_taught', type: 'json_array' },
   'boards-taught': { column: 'boards_taught', type: 'json_array' },
   'grades-taught': { column: 'grades_taught', type: 'json_array' },
   'state-wise': { column: 'state', type: 'scalar' },
   'city-wise': { column: 'city', type: 'scalar' },
-  'area-of-interest': { column: 'area_of_interest', type: 'scalar' },
+  'area-of-interest': { column: 'area_of_interest', type: 'json_array' },
   'teacher-roles': { column: 'teacher_roles', type: 'json_array' },
 };
 

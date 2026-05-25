@@ -8,6 +8,13 @@ const {
   FIELD_TYPES,
 } = require('../lib/teacherFormConfig');
 
+function toFilterFlag(val) {
+  if (val === true) return 1;
+  if (val === false || val == null) return 0;
+  const n = parseInt(String(val), 10);
+  return n === 1 ? 1 : 0;
+}
+
 async function getTeacherForm(req, res) {
   try {
     const config = await loadTeacherFormConfig();
@@ -184,6 +191,7 @@ async function addField(req, res) {
       label,
       type,
       required: Boolean(body.required),
+      filter: toFilterFlag(body.filter),
       builtIn: false,
       mapsTo: null,
       options: Array.isArray(body.options) ? body.options : [],
@@ -235,6 +243,9 @@ async function updateField(req, res) {
     }
     if (body.required !== undefined) {
       field.required = Boolean(body.required);
+    }
+    if (body.filter !== undefined) {
+      field.filter = toFilterFlag(body.filter);
     }
     if (body.options !== undefined) {
       field.options = Array.isArray(body.options) ? body.options : [];

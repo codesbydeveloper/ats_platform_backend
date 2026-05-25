@@ -189,6 +189,7 @@ function teacherRowToExcelExport(row) {
   const grades = parseJsonArray(row.grades_taught);
   const roles = parseJsonArray(row.teacher_roles);
   const skills = parseJsonArray(row.skills);
+  const subjects = parseJsonArray(row.subjects_taught);
 
   return {
     'CONTACT ID': row.id != null ? formatTeacherCode(row.id) : '',
@@ -199,7 +200,7 @@ function teacherRowToExcelExport(row) {
     'PREFERRED CITIES': row.preferred_location || '',
     'UNIVERSITIES / COLLEGES ATTENDED': universitiesExport(row),
     'EDUCATIONAL QUALIFICATION': row.qualification || '',
-    'SUBJECTS TAUGHT': row.subject_taught || '',
+    'SUBJECTS TAUGHT': joinList(subjects),
     TAGS: joinList(skills),
     'QUALIFICATION CERTIFICATION': row.certifications || '',
     'GRADES TAUGHT': joinList(grades),
@@ -295,12 +296,14 @@ function bodyFromExcelRow(row) {
       'EDUCATIONAL QUALIFICATION',
       'qualification',
     ]),
-    subject_taught: pickExcelColumn(row, [
-      'subjects taught',
-      'SUBJECTS TAUGHT',
-      'subject_taught',
-      'subject',
-    ]),
+    subjects_taught: splitMultiValue(
+      pickExcelColumn(row, [
+        'subjects taught',
+        'SUBJECTS TAUGHT',
+        'subjects_taught',
+        'subject',
+      ])
+    ),
     skills: splitMultiValue(tags),
     certifications: pickExcelColumn(row, [
       'qualification certification',

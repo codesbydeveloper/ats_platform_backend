@@ -147,14 +147,17 @@ const MULTIPART_SCALAR_FIELDS = [
   'state',
   'city',
   'address',
+  'country',
   'ug_college',
   'pg_university',
   'qualification',
   'certifications',
-  'subject_taught',
+  'subjects_taught',
+  'area_of_interest',
   'current_location',
   'preferred_location',
-  'area_of_interest',
+  'reason_to_join',
+  'where_did_you_hear_about_us',
   'internal_notes',
   'status',
   'boards_taught',
@@ -201,27 +204,6 @@ function buildBodyFromFlatMultipart(body) {
       return {
         success: false,
         error: 'work_experience must be valid JSON (array of jobs)',
-      };
-    }
-  }
-
-  const extraEdu =
-    body.additional_education ?? body.additionalEducation;
-  if (extraEdu != null && String(extraEdu).trim() !== '') {
-    const raw = String(extraEdu).trim();
-    try {
-      const parsed = JSON.parse(raw);
-      if (!Array.isArray(parsed)) {
-        return {
-          success: false,
-          error: 'additional_education must be a JSON array of strings',
-        };
-      }
-      out.additional_education = parsed;
-    } catch {
-      return {
-        success: false,
-        error: 'additional_education must be valid JSON (array of strings)',
       };
     }
   }
@@ -298,7 +280,40 @@ function parseStoredCustomFields(val) {
 }
 
 function fieldsFromTeacherBody(body) {
-  const additionalEducation = pickAdditionalEducationInput(body);
+  const wxRaw = pickWorkExperienceInput(body);
+  const work_experience = normalizeWorkExperience(wxRaw);
+  const subjects_taught = toStringArray(
+    body.subjects_taught ?? body.subject_taught ?? body.subjectTaught
+  );
+  const area_of_interest = toStringArray(
+    body.area_of_interest ?? body.areaOfInterest
+  );
+
+  const totalExpInput =
+    body.total_experience ??
+    body.experience_years ??
+    body.totalExperience ??
+    body.experience;
+  let total_experience = toNum(totalExpInput, NaN);
+  if (!Number.isFinite(total_experience)) {
+    // Backward-compat: allow putting overall exp on first work_experience row.
+    let derived = null;
+    for (const row of Array.isArray(wxRaw) ? wxRaw : []) {
+      const expSrc =
+        row?.experience ??
+        row?.exp ??
+        row?.years ??
+        row?.total_years ??
+        row?.totalYears;
+      const n = Number(expSrc);
+      if (Number.isFinite(n)) {
+        derived = n;
+        break;
+      }
+    }
+    total_experience = derived ?? 0;
+  }
+
   return {
     name: toStr(body.name),
     mobile: toStr(body.mobile),
@@ -306,30 +321,29 @@ function fieldsFromTeacherBody(body) {
     state: toStr(body.state),
     city: toStr(body.city),
     address: body.address != null ? String(body.address) : '',
+    country: toStr(body.country),
     ug_college: toStr(body.ug_college),
     pg_university: toStr(body.pg_university),
     qualification: toStr(body.qualification),
     certifications:
       body.certifications != null ? String(body.certifications) : '',
-    additional_education:
-      additionalEducation != null
-        ? additionalEducation
-        : parseStoredJsonArray(body.additional_education),
-    subject_taught: toStr(body.subject_taught),
+    subjects_taught,
+    area_of_interest,
     boards_taught: toStringArray(body.boards_taught),
     grades_taught: toStringArray(body.grades_taught),
     teacher_roles: toStringArray(body.teacher_roles),
     current_location: toStr(body.current_location),
     preferred_location: toStr(body.preferred_location),
-    area_of_interest: toStr(body.area_of_interest),
-    current_salary: toNum(body.current_salary, 0),
-    total_experience: toNum(
-      body.total_experience ?? body.experience_years ?? body.totalExperience,
+    reason_to_join: toStringArray(body.reason_to_join ?? body.reasonToJoin),
+    where_did_you_hear_about_us: toStringArray(
+      body.where_did_you_hear_about_us ?? body.whereDidYouHearAboutUs
+    ),
+    current_salary: toNum(
+      body.current_salary ?? body.currentSalary ?? body.salary,
       0
     ),
-    work_experience: normalizeWorkExperience(
-      pickWorkExperienceInput(body)
-    ),
+    total_experience,
+    work_experience,
     skills: toStringArray(body.skills),
     internal_notes:
       body.internal_notes != null
@@ -338,7 +352,6 @@ function fieldsFromTeacherBody(body) {
           ? String(body.notes)
           : '',
     status: normalizeStatus(body.status),
-    custom_fields: parseCustomFields(body),
   };
 }
 
@@ -384,7 +397,6 @@ async function createTeacher(req, res) {
       experience_years: f.total_experience,
       resume_path,
       resume_original_name,
-      custom_fields: f.custom_fields,
     });
   } catch (err) {
     if (err.code === 'ER_NO_SUCH_TABLE') {
@@ -453,19 +465,23 @@ function rowToPatchBase(row) {
     state: row.state,
     city: row.city,
     address: row.address != null ? String(row.address) : '',
+    country: row.country || '',
     ug_college: row.ug_college,
     pg_university: row.pg_university,
     qualification: row.qualification,
     certifications:
       row.certifications != null ? String(row.certifications) : '',
-    additional_education: parseStoredJsonArray(row.additional_education),
-    subject_taught: row.subject_taught,
+    subjects_taught: parseStoredJsonArray(row.subjects_taught),
+    area_of_interest: parseStoredJsonArray(row.area_of_interest),
     boards_taught: parseStoredJsonArray(row.boards_taught),
     grades_taught: parseStoredJsonArray(row.grades_taught),
     teacher_roles: parseStoredJsonArray(row.teacher_roles),
     current_location: row.current_location,
     preferred_location: row.preferred_location,
-    area_of_interest: row.area_of_interest,
+    reason_to_join: parseStoredJsonArray(row.reason_to_join),
+    where_did_you_hear_about_us: parseStoredJsonArray(
+      row.where_did_you_hear_about_us
+    ),
     current_salary: row.current_salary != null ? Number(row.current_salary) : 0,
     total_experience:
       row.total_experience != null ? Number(row.total_experience) : 0,
@@ -473,7 +489,6 @@ function rowToPatchBase(row) {
     skills: parseStoredJsonArray(row.skills),
     internal_notes: row.internal_notes != null ? String(row.internal_notes) : '',
     status: row.status || 'active',
-    custom_fields: parseStoredCustomFields(row.custom_fields),
   };
 }
 
@@ -523,13 +538,12 @@ async function updateTeacher(req, res) {
     }
 
     const sql = `UPDATE teachers SET
-    name=?, mobile=?, email=?, state=?, city=?, address=?,
-    ug_college=?, pg_university=?, qualification=?, certifications=?,
-    additional_education=?,
-    subject_taught=?, boards_taught=?, grades_taught=?, teacher_roles=?,
-    current_location=?, preferred_location=?, area_of_interest=?,
+    name=?, mobile=?, email=?, state=?, city=?, address=?, country=?,
+    ug_college=?, pg_university=?, qualification=?, certifications=?, subjects_taught=?, area_of_interest=?,
+    boards_taught=?, grades_taught=?, teacher_roles=?,
+    current_location=?, preferred_location=?, reason_to_join=?, where_did_you_hear_about_us=?,
     current_salary=?, total_experience=?, work_experience=?, skills=?,
-    internal_notes=?, resume_path=?, status=?, resume_original_name=?, custom_fields=?
+    internal_notes=?, resume_path=?, status=?, resume_original_name=?
     WHERE id=?`;
 
     await pool.execute(sql, [
@@ -539,18 +553,20 @@ async function updateTeacher(req, res) {
       f.state,
       f.city,
       f.address,
+      f.country,
       f.ug_college,
       f.pg_university,
       f.qualification,
       f.certifications,
-      JSON.stringify(f.additional_education),
-      f.subject_taught,
+      JSON.stringify(f.subjects_taught),
+      JSON.stringify(f.area_of_interest),
       JSON.stringify(f.boards_taught),
       JSON.stringify(f.grades_taught),
       JSON.stringify(f.teacher_roles),
       f.current_location,
       f.preferred_location,
-      f.area_of_interest,
+      JSON.stringify(f.reason_to_join),
+      JSON.stringify(f.where_did_you_hear_about_us),
       f.current_salary,
       f.total_experience,
       JSON.stringify(f.work_experience),
@@ -559,7 +575,6 @@ async function updateTeacher(req, res) {
       resume_path,
       f.status,
       resume_original_name,
-      JSON.stringify(f.custom_fields || {}),
       id,
     ]);
 
@@ -757,6 +772,10 @@ function mapTeacherRow(row) {
   const teacher_roles = jsonToArray(row.teacher_roles);
   const work_experience = jsonToWorkExp(row.work_experience);
   const skills = jsonToArray(row.skills);
+  const subjects_taught = jsonToArray(row.subjects_taught);
+  const area_of_interest = jsonToArray(row.area_of_interest);
+  const reason_to_join = jsonToArray(row.reason_to_join);
+  const where_did_you_hear_about_us = jsonToArray(row.where_did_you_hear_about_us);
 
   const resume_path = row.resume_path || null;
   const resumeOriginal = row.resume_original_name || null;
@@ -776,7 +795,7 @@ function mapTeacherRow(row) {
     email: row.email,
     mobile: row.mobile,
     city: row.city || '',
-    subject: row.subject_taught || '',
+    subject: subjects_taught.join(', '),
     roles: teacher_roles.join(', '),
     grades: grades_taught.join(', '),
     boards: boards_taught.join(', '),
@@ -785,15 +804,17 @@ function mapTeacherRow(row) {
     status: row.status || 'active',
     state: row.state,
     address: row.address,
+    country: row.country || '',
     ug_college: row.ug_college,
     pg_university: row.pg_university,
     qualification: row.qualification,
     certifications: row.certifications,
-    additional_education: parseStoredJsonArray(row.additional_education),
-    subject_taught: row.subject_taught,
+    subjects_taught,
+    area_of_interest,
     current_location: row.current_location,
     preferred_location: row.preferred_location,
-    area_of_interest: row.area_of_interest,
+    reason_to_join,
+    where_did_you_hear_about_us,
     current_salary:
       row.current_salary != null ? Number(row.current_salary) : 0,
     total_experience:
@@ -806,7 +827,6 @@ function mapTeacherRow(row) {
     work_experience,
     skills,
     internal_notes: row.internal_notes,
-    custom_fields: parseStoredCustomFields(row.custom_fields),
     resume_path,
     resume_original_name: resumeOriginal,
     created_at: row.created_at,
@@ -840,9 +860,8 @@ function buildExportFilter(opts, scope) {
     const q = opts.q ? String(opts.q).trim() : '';
     if (q) {
       const term = `%${q}%`;
-      where +=
-        ' AND (name LIKE ? OR email LIKE ? OR mobile LIKE ? OR city LIKE ? OR subject_taught LIKE ?)';
-      params.push(term, term, term, term, term);
+      where += ' AND (name LIKE ? OR email LIKE ? OR mobile LIKE ? OR city LIKE ?)';
+      params.push(term, term, term, term);
     }
     const likeCol = (col, val) => {
       if (val == null || String(val).trim() === '') return;
@@ -852,7 +871,6 @@ function buildExportFilter(opts, scope) {
     likeCol('city', opts.city);
     likeCol('state', opts.state);
     likeCol('email', opts.email);
-    likeCol('subject_taught', opts.subject);
     if (opts.status != null && String(opts.status).trim() !== '') {
       where += ' AND status = ?';
       params.push(String(opts.status).trim());
@@ -1107,7 +1125,7 @@ async function listTeachers(req, res) {
   try {
     const page = Math.max(1, parseInt(String(req.query.page || '1'), 10) || 1);
     const limitRaw = parseInt(String(req.query.limit ?? '10'), 10);
-    const limit = Math.min(100, Math.max(1, Number.isFinite(limitRaw) ? limitRaw : 10));
+    const limit = Math.min(200, Math.max(1, Number.isFinite(limitRaw) ? limitRaw : 10));
     const offset = (page - 1) * limit;
 
     const { where, params } = buildTeacherListWhere(req.query);
@@ -1153,13 +1171,13 @@ async function listTeachers(req, res) {
 }
 
 const TEACHER_INSERT_SQL = `INSERT INTO teachers (
-  name, mobile, email, state, city, address,
-  ug_college, pg_university, qualification, certifications, additional_education,
-  subject_taught, boards_taught, grades_taught, teacher_roles,
-  current_location, preferred_location, area_of_interest,
+  name, mobile, email, state, city, address, country,
+  ug_college, pg_university, qualification, certifications, subjects_taught, area_of_interest,  
+  boards_taught, grades_taught, teacher_roles,
+  current_location, preferred_location, reason_to_join, where_did_you_hear_about_us,
   current_salary, total_experience, work_experience, skills,
-  internal_notes, resume_path, status, resume_original_name, custom_fields
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+  internal_notes, resume_path, status, resume_original_name
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
 
 function teacherInsertValues(f, resume_path, resume_original_name) {
   return [
@@ -1169,18 +1187,20 @@ function teacherInsertValues(f, resume_path, resume_original_name) {
     f.state,
     f.city,
     f.address,
+    f.country,
     f.ug_college,
     f.pg_university,
     f.qualification,
     f.certifications,
-    JSON.stringify(f.additional_education),
-    f.subject_taught,
+    JSON.stringify(f.subjects_taught),
+    JSON.stringify(f.area_of_interest),
     JSON.stringify(f.boards_taught),
     JSON.stringify(f.grades_taught),
     JSON.stringify(f.teacher_roles),
     f.current_location,
     f.preferred_location,
-    f.area_of_interest,
+    JSON.stringify(f.reason_to_join),
+    JSON.stringify(f.where_did_you_hear_about_us),
     f.current_salary,
     f.total_experience,
     JSON.stringify(f.work_experience),
@@ -1189,7 +1209,6 @@ function teacherInsertValues(f, resume_path, resume_original_name) {
     resume_path,
     f.status,
     resume_original_name,
-    JSON.stringify(f.custom_fields || {}),
   ];
 }
 

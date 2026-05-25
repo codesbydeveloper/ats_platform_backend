@@ -1,5 +1,6 @@
 const pool = require('../config/database');
 const { logActivity } = require('../lib/activityLog');
+const { loadTeacherFormConfig } = require('../lib/teacherFormConfig');
 const {
   getLookupField,
   LOOKUP_FIELDS,
@@ -160,13 +161,36 @@ function rowsToTree(rows) {
 /** All categories + sub-items — no pagination (for "Your categories" UI). */
 async function listAllCategories(req, res) {
   try {
-    const [allRows] = await pool.execute(
-      `SELECT id, name, parent_id, created_at, updated_at
-       FROM categories
-       ORDER BY CASE WHEN parent_id IS NULL THEN 0 ELSE 1 END, id DESC`
-    );
-    const categories = rowsToTree(allRows);
-    categories.sort((a, b) => b.id - a.id);
+    const config = await loadTeacherFormConfig();
+
+    const categories = [];
+    for (const section of config.sections || []) {
+      const fields = Array.isArray(section.fields) ? section.fields : [];
+      for (const f of fields) {
+        if (Number(f.filter) !== 1) continue;
+        categories.push({
+          id: `${section.id}:${f.key}`,
+          name: f.label,
+          section_id: section.id,
+          section_title: section.title,
+          key: f.key,
+          type: f.type,
+          options: Array.isArray(f.options) ? f.options : [],
+          required: Boolean(f.required),
+          mapsTo: f.mapsTo ?? null,
+          sortOrder: Number.isFinite(Number(f.sortOrder)) ? Number(f.sortOrder) : 0,
+          filter: 1,
+        });
+      }
+    }
+
+    categories.sort((a, b) => {
+      if (a.section_title !== b.section_title) {
+        return String(a.section_title).localeCompare(String(b.section_title));
+      }
+      return (a.sortOrder || 0) - (b.sortOrder || 0);
+    });
+
     return res.json({
       count: categories.length,
       categories,

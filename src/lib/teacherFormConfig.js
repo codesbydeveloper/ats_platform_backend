@@ -23,6 +23,13 @@ function slugifyId(raw, fallback = 'item') {
   return s || `${fallback}-${Date.now()}`;
 }
 
+function normalizeFilterFlag(val) {
+  if (val === true) return 1;
+  if (val === false || val == null) return 0;
+  const n = parseInt(String(val), 10);
+  return n === 1 ? 1 : 0;
+}
+
 function normalizeField(field, sortOrder = 0) {
   const key = slugifyId(field.key || field.id, 'field').replace(/-/g, '_');
   const id = slugifyId(field.id || key, 'field');
@@ -33,6 +40,7 @@ function normalizeField(field, sortOrder = 0) {
     label: String(field.label || key).trim(),
     type,
     required: Boolean(field.required),
+    filter: normalizeFilterFlag(field.filter),
     builtIn: Boolean(field.builtIn),
     mapsTo: field.mapsTo != null ? String(field.mapsTo) : null,
     options: Array.isArray(field.options)
