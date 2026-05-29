@@ -75,11 +75,7 @@ function openAiClientError(err) {
 
 let _openai;
 let _openaiKey = null;
-async function getOpenAI() {
-  const apiKey = await getOpenAIKey();
-  if (!apiKey) {
-    throw new Error('openai_api_key is missing in settings');
-  }
+function getOpenAI(apiKey) {
   if (!_openai || _openaiKey !== apiKey) {
     _openaiKey = apiKey;
     _openai = new OpenAI({ apiKey });
@@ -89,41 +85,40 @@ async function getOpenAI() {
 
 const SYSTEM_PROMPT = `You are a resume parser. Extract structured data from the resume text and return ONLY a valid JSON object — no markdown, no explanation.
 
-Use this exact schema (omit fields you cannot find, use null for missing scalar fields, empty arrays [] for missing arrays):
+Use this exact schema (use null for missing scalar fields, empty arrays [] for missing arrays):
 
 {
   "name": string,
   "mobile": string,
   "email": string,
+  "country": string,
   "state": string,
   "city": string,
   "address": string,
-  "ugCollege": string,
-  "pgUniversity": string,
+  "ug_college": string,
+  "pg_university": string,
   "qualification": string,
   "certifications": string,
-  "subject": string,
-  "boards": string[],
-  "grades": string[],
-  "roles": string[],
-  "currentLocation": string,
-  "preferredLocation": string,
-  "areaOfInterest": string,
-  "currentSalary": number | null,
-  "experienceYears": number | null,
-  "status": "active",
-  "skills": string[],
-  "notes": string,
-  "workHistory": [
+  "subject_taught": string,
+  "boards_taught": string[],
+  "grades_taught": string[],
+  "reason_to_join": string,
+  "where_did_you_hear_about_us": string,
+  "current_location": string,
+  "preferred_location": string,
+  "area_of_interest": string,
+  "employed": boolean,
+  "salary": number | null,
+  "work_history": [
     {
-      "id": "work-temp-<N>",
-      "schoolName": string,
+      "school_organization": string,
       "role": string,
-      "from": "YYYY-MM-DD" | null,
-      "to": "YYYY-MM-DD" | null,
-      "currentlyWorking": boolean
+      "duration_from": "YYYY-MM-DD" | null,
+      "duration_to": "YYYY-MM-DD" | null
     }
-  ]
+  ],
+  "total_years_experience": number | null,
+  "notes": string
 }`;
 
 function resolveType(mimetype, originalname) {
@@ -179,25 +174,20 @@ async function parseResume(req, res) {
   try {
     apiKey = await getOpenAIKey();
   } catch (err) {
-    if (err.code === 'ER_NO_SUCH_TABLE') {
-      return res.status(503).json({
-        error: 'Database not ready. Run: npm run migrate',
-      });
-    }
-    console.error(err);
-    return res.status(500).json({ error: 'Server error' });
+    // DB unavailable — fall back to env
+    apiKey = process.env.OPENAI_API_KEY || '';
   }
 
   if (!apiKey) {
     return res.status(503).json({
       error: 'Resume AI parsing is not configured',
-      detail: 'Set openai_api_key in settings, then retry.',
+      detail: 'Set OPENAI_API_KEY in .env or openai_api_key in settings.',
     });
   }
 
   let parsed;
   try {
-    const openai = await getOpenAI();
+    const openai = getOpenAI(apiKey);
     const completion = await openai.chat.completions.create({
       model: 'gpt-4o-mini',
       temperature: 0,
