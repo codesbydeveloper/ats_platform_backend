@@ -51,6 +51,116 @@ async function replaceTeacherForm(req, res) {
   }
 }
 
+function toIdList(v) {
+  if (!Array.isArray(v)) return [];
+  return v.map((x) => String(x).trim()).filter(Boolean);
+}
+
+/**
+ * PATCH /api/teacher-form/reorder
+ *
+ * Accepts either:
+ * - Full config { version, sections: [...] } (same as PUT /api/teacher-form), OR
+ * - Reorder payload:
+ *   {
+ *     section_order?: string[],
+ *     field_orders?: { [sectionId: string]: string[] } // list of field keys/ids
+ *   }
+ */
+async function reorderTeacherForm(req, res) {
+  const body = req.body || {};
+  try {
+    // If frontend sends the full config after drag-drop, just save it.
+    if (body && typeof body === 'object' && Array.isArray(body.sections)) {
+      const saved = await saveTeacherFormConfig(body);
+      return res.json(saved);
+    }
+
+    const section_order = toIdList(body.section_order ?? body.sectionOrder);
+    const field_orders =
+      body.field_orders && typeof body.field_orders === 'object'
+        ? body.field_orders
+        : body.fieldOrders && typeof body.fieldOrders === 'object'
+          ? body.fieldOrders
+          : null;
+
+    const config = await loadTeacherFormConfig();
+
+    // Reorder sections.
+    if (section_order.length) {
+      const byId = new Map(config.sections.map((s) => [s.id, s]));
+      const ordered = [];
+      for (const id of section_order) {
+        const sec = byId.get(id);
+        if (sec) ordered.push(sec);
+      }
+      for (const sec of config.sections) {
+        if (!ordered.includes(sec)) ordered.push(sec);
+      }
+      ordered.forEach((sec, i) => {
+        sec.sortOrder = i;
+      });
+      config.sections = ordered;
+    }
+
+    // Reorder/move fields inside sections.
+    if (field_orders) {
+      // Build a global index to find current location by key/id.
+      const index = new Map();
+      for (const sec of config.sections) {
+        for (const f of sec.fields) {
+          index.set(f.key, { sec, f });
+          index.set(f.id, { sec, f });
+        }
+      }
+
+      for (const [sectionIdRaw, listRaw] of Object.entries(field_orders)) {
+        const sectionId = String(sectionIdRaw).trim();
+        const orderList = toIdList(listRaw);
+        if (!sectionId || orderList.length === 0) continue;
+
+        const target = findSection(config, sectionId);
+        if (!target) continue;
+
+        const next = [];
+        for (const fieldRef of orderList) {
+          const hit = index.get(fieldRef);
+          if (!hit) continue;
+          const { sec: fromSec, f } = hit;
+          // Remove from old section if moving.
+          if (fromSec !== target) {
+            fromSec.fields = fromSec.fields.filter((x) => x.key !== f.key);
+          } else {
+            target.fields = target.fields.filter((x) => x.key !== f.key);
+          }
+          next.push(f);
+          index.set(f.key, { sec: target, f });
+          index.set(f.id, { sec: target, f });
+        }
+
+        // Append anything not mentioned (keep current order).
+        for (const f of target.fields) {
+          if (!next.find((x) => x.key === f.key)) next.push(f);
+        }
+
+        next.forEach((f, i) => {
+          f.sortOrder = i;
+        });
+        target.fields = next;
+      }
+    }
+
+    const saved = await saveTeacherFormConfig(config);
+    return res.json(saved);
+  } catch (err) {
+    if (err.message && err.message.startsWith('Duplicate field key')) {
+      return res.status(400).json({ error: err.message });
+    }
+    console.error(err);
+    return res.status(500).json({ error: 'Server error' });
+  }
+}
+
 async function addSection(req, res) {
   const body = req.body || {};
   const title = body.title != null ? String(body.title).trim() : '';
@@ -297,6 +407,7 @@ async function deleteField(req, res) {
 module.exports = {
   getTeacherForm,
   replaceTeacherForm,
+  reorderTeacherForm,
   addSection,
   updateSection,
   deleteSection,

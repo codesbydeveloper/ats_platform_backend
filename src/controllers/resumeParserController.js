@@ -1,12 +1,39 @@
 const mammoth = require('mammoth');
 const pdfParse = require('pdf-parse');
 const OpenAI = require('openai');
+const pool = require('../config/database');
 
-function getOpenAIKey() {
-  const key = process.env.OPENAI_API_KEY
-    ? String(process.env.OPENAI_API_KEY).trim().replace(/^['"]|['"]$/g, '')
-    : '';
-  return key;
+function parseMaybeJson(val) {
+  if (val == null) return null;
+  if (typeof val === 'object') return val;
+  if (typeof Buffer !== 'undefined' && Buffer.isBuffer(val)) {
+    try {
+      return JSON.parse(val.toString('utf8'));
+    } catch {
+      return null;
+    }
+  }
+  if (typeof val === 'string') {
+    const t = val.trim();
+    if (t === '') return null;
+    try {
+      return JSON.parse(t);
+    } catch {
+      return t;
+    }
+  }
+  return val;
+}
+
+async function getOpenAIKey() {
+  const [rows] = await pool.execute(
+    'SELECT `value` FROM settings WHERE `key` = ? LIMIT 1',
+    ['openai_api_key']
+  );
+  if (!rows.length) return '';
+  const parsed = parseMaybeJson(rows[0].value);
+  const key = parsed != null ? String(parsed).trim() : '';
+  return key.replace(/^['"]|['"]$/g, '');
 }
 
 function openAiClientError(err) {
@@ -22,7 +49,7 @@ function openAiClientError(err) {
       body: {
         error: 'OpenAI API key is invalid or expired',
         detail:
-          'Update OPENAI_API_KEY in your .env file with a new key from https://platform.openai.com/api-keys, then restart the server (npm run dev).',
+          'Update openai_api_key in settings with a new key from https://platform.openai.com/api-keys, then retry.',
       },
     };
   }
@@ -47,12 +74,16 @@ function openAiClientError(err) {
 }
 
 let _openai;
-function getOpenAI() {
-  const apiKey = getOpenAIKey();
+let _openaiKey = null;
+async function getOpenAI() {
+  const apiKey = await getOpenAIKey();
   if (!apiKey) {
-    throw new Error('OPENAI_API_KEY is missing in .env');
+    throw new Error('openai_api_key is missing in settings');
   }
-  if (!_openai) _openai = new OpenAI({ apiKey });
+  if (!_openai || _openaiKey !== apiKey) {
+    _openaiKey = apiKey;
+    _openai = new OpenAI({ apiKey });
+  }
   return _openai;
 }
 
@@ -144,17 +175,30 @@ async function parseResume(req, res) {
     return res.status(422).json({ error: 'Could not extract readable text from the file.' });
   }
 
-  if (!getOpenAIKey()) {
+  let apiKey = '';
+  try {
+    apiKey = await getOpenAIKey();
+  } catch (err) {
+    if (err.code === 'ER_NO_SUCH_TABLE') {
+      return res.status(503).json({
+        error: 'Database not ready. Run: npm run migrate',
+      });
+    }
+    console.error(err);
+    return res.status(500).json({ error: 'Server error' });
+  }
+
+  if (!apiKey) {
     return res.status(503).json({
       error: 'Resume AI parsing is not configured',
-      detail:
-        'Add OPENAI_API_KEY to .env (see .env.example), then restart the server.',
+      detail: 'Set openai_api_key in settings, then retry.',
     });
   }
 
   let parsed;
   try {
-    const completion = await getOpenAI().chat.completions.create({
+    const openai = await getOpenAI();
+    const completion = await openai.chat.completions.create({
       model: 'gpt-4o-mini',
       temperature: 0,
       messages: [

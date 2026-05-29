@@ -2,6 +2,7 @@ const { Router } = require('express');
 const {
   getTeacherForm,
   replaceTeacherForm,
+  reorderTeacherForm,
   addSection,
   updateSection,
   deleteSection,
@@ -14,6 +15,7 @@ const router = Router();
 
 router.get('/', getTeacherForm);
 router.put('/', replaceTeacherForm);
+router.patch('/reorder', reorderTeacherForm);
 router.post('/sections', addSection);
 router.patch('/sections/:sectionId', updateSection);
 router.delete('/sections/:sectionId', deleteSection);
