@@ -391,20 +391,33 @@ async function updateProfile(req, res) {
   const name = body.name != null ? String(body.name).trim() : '';
   const email =
     body.email != null ? String(body.email).trim().toLowerCase() : '';
+  const hasNumber = body.number != null;
+  const number = hasNumber ? String(body.number).trim() : null;
 
   const fields = [];
   if (!name || name.length < 2) fields.push('name');
   if (!email || !isValidEmail(email)) fields.push('email');
+  if (hasNumber && (!number || number.length > 64)) fields.push('number');
   if (fields.length) {
+    const detail =
+      fields.includes('name') && fields.includes('email') && fields.includes('number')
+        ? 'Name must be at least 2 characters, email must be valid, and number is required'
+        : fields.includes('name') && fields.includes('email')
+          ? 'Name must be at least 2 characters and email must be valid'
+          : fields.includes('name') && fields.includes('number')
+            ? 'Display name must be at least 2 characters and number is required'
+            : fields.includes('email') && fields.includes('number')
+              ? 'Enter a valid email address and number is required'
+              : fields.includes('name')
+                ? 'Display name must be at least 2 characters'
+                : fields.includes('email')
+                  ? 'Enter a valid email address'
+                  : 'Number is required';
+
     return res.status(400).json({
       error: 'Invalid profile fields',
       fields,
-      detail:
-        fields.includes('name') && fields.includes('email')
-          ? 'Name must be at least 2 characters and email must be valid'
-          : fields.includes('name')
-            ? 'Display name must be at least 2 characters'
-            : 'Enter a valid email address',
+      detail,
     });
   }
 
@@ -417,10 +430,16 @@ async function updateProfile(req, res) {
       return res.status(409).json({ error: 'Email is already in use' });
     }
 
-    const [result] = await pool.execute(
-      'UPDATE users SET name = ?, email = ? WHERE id = ?',
-      [name, email, req.auth.userId]
-    );
+    const [result] = hasNumber
+      ? await pool.execute(
+          'UPDATE users SET name = ?, email = ?, `number` = ? WHERE id = ?',
+          [name, email, number, req.auth.userId]
+        )
+      : await pool.execute('UPDATE users SET name = ?, email = ? WHERE id = ?', [
+          name,
+          email,
+          req.auth.userId,
+        ]);
     if (result.affectedRows === 0) {
       return res.status(404).json({ error: 'User not found' });
     }
