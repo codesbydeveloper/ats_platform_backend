@@ -102,7 +102,7 @@ Use this exact schema (use null for missing scalar fields, empty arrays [] for m
   "address": string,
   "ug_college": string,
   "pg_university": string,
-  "qualification": string,
+  "qualification": string[],
   "certifications": string[],
   "subjects_taught": string[],
   "boards_taught": string[],

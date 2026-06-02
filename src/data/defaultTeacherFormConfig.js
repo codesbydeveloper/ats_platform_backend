@@ -114,7 +114,7 @@ const defaultTeacherFormConfig = {
           id: 'qualification',
           key: 'qualification',
           label: 'Qualification',
-          type: 'text',
+          type: 'multiselect',
           required: true,
           builtIn: true,
           mapsTo: 'qualification',

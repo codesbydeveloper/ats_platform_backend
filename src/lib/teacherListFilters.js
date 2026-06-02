@@ -93,9 +93,13 @@ function buildTeacherListWhere(query) {
   }
 
   const qualifications = parseQueryList(query.qualification);
-  if (qualifications.length === 1) {
-    where += ' AND TRIM(qualification) = ?';
-    params.push(qualifications[0]);
+  if (qualifications.length) {
+    for (const q of qualifications) {
+      // New storage: qualifications JSON array. Backward-compat: also check legacy scalar column.
+      where +=
+        ' AND (JSON_CONTAINS(COALESCE(qualifications, JSON_ARRAY()), JSON_QUOTE(?)) OR TRIM(qualification) = ?)';
+      params.push(q, q);
+    }
   }
 
   const certifications = query.certifications ?? query.certification;

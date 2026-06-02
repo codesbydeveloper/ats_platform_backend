@@ -48,15 +48,26 @@ function joinList(arr) {
 function splitMultiValue(raw) {
   if (raw == null || String(raw).trim() === '') return [];
   return String(raw)
-    .split(/[,;]/)
+    .split(/[,;/]/)
     .map((s) => s.trim())
-    .filter(Boolean);
+    .filter((s) => {
+      if (!s) return false;
+      const n = s.toLowerCase();
+      return n !== 'na' && n !== 'n/a' && n !== 'nil' && n !== 'none' && n !== '-';
+    });
 }
 
 function parseJsonArray(val) {
   if (val == null) return [];
   if (Array.isArray(val)) {
     return val.map((x) => String(x).trim()).filter(Boolean);
+  }
+  if (typeof Buffer !== 'undefined' && Buffer.isBuffer(val)) {
+    try {
+      return parseJsonArray(JSON.parse(val.toString('utf8')));
+    } catch {
+      return [];
+    }
   }
   if (typeof val === 'string') {
     try {
@@ -176,11 +187,13 @@ function universitiesExport(row) {
 function universitiesImport(raw) {
   const t = String(raw || '').trim();
   if (!t) return { ug_college: '', pg_university: '' };
-  const parts = splitMultiValue(t.replace(/\s*\/\s*/g, ';'));
-  if (parts.length >= 2) {
-    return { ug_college: parts[0], pg_university: parts.slice(1).join('; ') };
-  }
-  return { ug_college: t, pg_university: '' };
+  // Excel convention:
+  // - "UG College / PG University"
+  // - PG is everything after the first "/"
+  const parts = splitMultiValue(t);
+  const ug = parts[0] || '';
+  const pg = parts.length > 1 ? parts.slice(1).join('; ') : '';
+  return { ug_college: ug, pg_university: pg };
 }
 
 /** Map DB row → Excel row (exact header names). */
@@ -190,6 +203,7 @@ function teacherRowToExcelExport(row) {
   const roles = parseJsonArray(row.teacher_roles);
   const skills = parseJsonArray(row.skills);
   const subjects = parseJsonArray(row.subjects_taught);
+  const qualifications = parseJsonArray(row.qualifications);
 
   return {
     'CONTACT ID': row.id != null ? formatTeacherCode(row.id) : '',
@@ -199,7 +213,7 @@ function teacherRowToExcelExport(row) {
     CITY: row.city || '',
     'PREFERRED CITIES': row.preferred_location || '',
     'UNIVERSITIES / COLLEGES ATTENDED': universitiesExport(row),
-    'EDUCATIONAL QUALIFICATION': row.qualification || '',
+    'EDUCATIONAL QUALIFICATION': joinList(qualifications) || row.qualification || '',
     'SUBJECTS TAUGHT': joinList(subjects),
     TAGS: joinList(skills),
     'QUALIFICATION CERTIFICATION': row.certifications || '',
@@ -241,8 +255,31 @@ function pickExcelColumn(row, candidates) {
   return '';
 }
 
+function parseContactId(raw) {
+  const t = String(raw || '').trim();
+  if (!t) return null;
+  const n = t.toLowerCase();
+  if (n === 'na' || n === 'n/a' || n === 'nil' || n === 'none' || n === '-') return null;
+
+  // Accept "TCH-00012" (export format) or plain numeric.
+  const m = t.match(/tch\s*-\s*0*([0-9]+)/i);
+  const digits = m && m[1] ? m[1] : t.replace(/[^\d]/g, '');
+  if (!digits) return null;
+  const id = parseInt(digits, 10);
+  return Number.isFinite(id) && id > 0 ? id : null;
+}
+
 /** Map Excel row → teacher API body for fieldsFromTeacherBody(). */
 function bodyFromExcelRow(row) {
+  const contactIdRaw = pickExcelColumn(row, [
+    'contact id',
+    'CONTACT ID',
+    'teacher id',
+    'teacher_id',
+    'id',
+  ]);
+  const id = parseContactId(contactIdRaw);
+
   const name = pickExcelColumn(row, ['name', 'NAME']);
   const email = pickExcelColumn(row, ['email', 'EMAIL']);
   const mobile = pickExcelColumn(row, ['mobile', 'MOBILE', 'phone']);
@@ -280,6 +317,7 @@ function bodyFromExcelRow(row) {
   ]);
 
   return {
+    ...(id ? { id } : {}),
     name,
     email,
     mobile,
@@ -291,11 +329,13 @@ function bodyFromExcelRow(row) {
     ]),
     ug_college,
     pg_university,
-    qualification: pickExcelColumn(row, [
-      'educational qualification',
-      'EDUCATIONAL QUALIFICATION',
-      'qualification',
-    ]),
+    qualification: splitMultiValue(
+      pickExcelColumn(row, [
+        'educational qualification',
+        'EDUCATIONAL QUALIFICATION',
+        'qualification',
+      ])
+    ),
     subjects_taught: splitMultiValue(
       pickExcelColumn(row, [
         'subjects taught',

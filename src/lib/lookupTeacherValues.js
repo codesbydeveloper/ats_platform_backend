@@ -2,7 +2,7 @@ const pool = require('../config/database');
 
 /** Maps lookup slug → teacher table column. */
 const TEACHER_FIELD_BY_SLUG = {
-  'educational-qualification': { column: 'qualification', type: 'scalar' },
+  'educational-qualification': { column: 'qualifications', type: 'json_array' },
   'qualification-certification': { column: 'certifications', type: 'scalar' },
   'subjects-taught': { column: 'subjects_taught', type: 'json_array' },
   'boards-taught': { column: 'boards_taught', type: 'json_array' },
@@ -20,6 +20,13 @@ function getTeacherFieldMeta(slug) {
 function parseJsonArray(val) {
   if (val == null) return [];
   let raw = val;
+  if (typeof Buffer !== 'undefined' && Buffer.isBuffer(val)) {
+    try {
+      raw = JSON.parse(val.toString('utf8'));
+    } catch {
+      return [];
+    }
+  }
   if (typeof val === 'string') {
     try {
       raw = JSON.parse(val);

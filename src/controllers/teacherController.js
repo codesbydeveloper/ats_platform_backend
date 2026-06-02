@@ -41,7 +41,13 @@ function toStr(v, fallback = '') {
 function toStringArray(v) {
   if (v == null) return [];
   if (Array.isArray(v)) {
-    return v.map((x) => String(x).trim()).filter(Boolean);
+    return v
+      .map((x) => String(x).trim())
+      .filter((s) => {
+        if (!s) return false;
+        const n = s.toLowerCase();
+        return n !== 'na' && n !== 'n/a' && n !== 'nil' && n !== 'none' && n !== '-';
+      });
   }
   if (typeof v === 'string') {
     const t = v.trim();
@@ -56,11 +62,32 @@ function toStringArray(v) {
       }
     }
     return t
-      .split(/[,;]/)
+      .split(/[,;/]/)
       .map((s) => s.trim())
-      .filter(Boolean);
+      .filter((s) => {
+        if (!s) return false;
+        const n = s.toLowerCase();
+        return n !== 'na' && n !== 'n/a' && n !== 'nil' && n !== 'none' && n !== '-';
+      });
   }
   return [];
+}
+
+function joinScalar(arr, maxLen) {
+  if (!Array.isArray(arr) || arr.length === 0) return '';
+  const joined = arr.map((x) => String(x).trim()).filter(Boolean).join('; ');
+  if (!maxLen || joined.length <= maxLen) return joined;
+  return joined.slice(0, maxLen);
+}
+
+function digitsOnlyPhone(v) {
+  return String(v || '').replace(/[^\d]/g, '');
+}
+
+function last10Digits(v) {
+  const d = digitsOnlyPhone(v);
+  if (!d) return '';
+  return d.length <= 10 ? d : d.slice(-10);
 }
 
 function toNum(v, fallback = 0) {
@@ -289,6 +316,13 @@ function fieldsFromTeacherBody(body) {
     body.area_of_interest ?? body.areaOfInterest
   );
 
+  const qualifications = toStringArray(
+    body.qualifications ?? body.qualification ?? body.educational_qualification
+  );
+  const qualificationFallback =
+    typeof body.qualification === 'string' ? toStr(body.qualification) : '';
+  const qualification = joinScalar(qualifications, 512) || qualificationFallback;
+
   const totalExpInput =
     body.total_experience ??
     body.experience_years ??
@@ -324,7 +358,8 @@ function fieldsFromTeacherBody(body) {
     country: toStr(body.country),
     ug_college: toStr(body.ug_college),
     pg_university: toStr(body.pg_university),
-    qualification: toStr(body.qualification),
+    qualifications,
+    qualification,
     certifications:
       body.certifications != null ? String(body.certifications) : '',
     subjects_taught,
@@ -430,6 +465,13 @@ function parseStoredJsonArray(val) {
   if (Array.isArray(val)) {
     return val.map((x) => String(x).trim()).filter(Boolean);
   }
+  if (typeof Buffer !== 'undefined' && Buffer.isBuffer(val)) {
+    try {
+      return parseStoredJsonArray(JSON.parse(val.toString('utf8')));
+    } catch {
+      return [];
+    }
+  }
   if (typeof val === 'string') {
     try {
       const p = JSON.parse(val);
@@ -458,6 +500,11 @@ function parseStoredWorkExp(val) {
 }
 
 function rowToPatchBase(row) {
+  const qualifications =
+    row.qualifications != null
+      ? parseStoredJsonArray(row.qualifications)
+      : toStringArray(row.qualification);
+
   return {
     name: row.name,
     mobile: row.mobile,
@@ -468,7 +515,8 @@ function rowToPatchBase(row) {
     country: row.country || '',
     ug_college: row.ug_college,
     pg_university: row.pg_university,
-    qualification: row.qualification,
+    qualifications,
+    qualification: joinScalar(qualifications, 512) || row.qualification,
     certifications:
       row.certifications != null ? String(row.certifications) : '',
     subjects_taught: parseStoredJsonArray(row.subjects_taught),
@@ -539,7 +587,7 @@ async function updateTeacher(req, res) {
 
     const sql = `UPDATE teachers SET
     name=?, mobile=?, email=?, state=?, city=?, address=?, country=?,
-    ug_college=?, pg_university=?, qualification=?, certifications=?, subjects_taught=?, area_of_interest=?,
+    ug_college=?, pg_university=?, qualifications=?, qualification=?, certifications=?, subjects_taught=?, area_of_interest=?,
     boards_taught=?, grades_taught=?, teacher_roles=?,
     current_location=?, preferred_location=?, reason_to_join=?, where_did_you_hear_about_us=?,
     current_salary=?, total_experience=?, work_experience=?, skills=?,
@@ -556,6 +604,7 @@ async function updateTeacher(req, res) {
       f.country,
       f.ug_college,
       f.pg_university,
+      JSON.stringify(f.qualifications ?? []),
       f.qualification,
       f.certifications,
       JSON.stringify(f.subjects_taught),
@@ -776,6 +825,10 @@ function mapTeacherRow(row) {
   const area_of_interest = jsonToArray(row.area_of_interest);
   const reason_to_join = jsonToArray(row.reason_to_join);
   const where_did_you_hear_about_us = jsonToArray(row.where_did_you_hear_about_us);
+  const qualifications =
+    row.qualifications != null
+      ? jsonToArray(row.qualifications)
+      : toStringArray(row.qualification);
 
   const resume_path = row.resume_path || null;
   const resumeOriginal = row.resume_original_name || null;
@@ -807,7 +860,8 @@ function mapTeacherRow(row) {
     country: row.country || '',
     ug_college: row.ug_college,
     pg_university: row.pg_university,
-    qualification: row.qualification,
+    qualifications,
+    qualification: joinScalar(qualifications, 512) || row.qualification,
     certifications: row.certifications,
     subjects_taught,
     area_of_interest,
@@ -1172,12 +1226,51 @@ async function listTeachers(req, res) {
 
 const TEACHER_INSERT_SQL = `INSERT INTO teachers (
   name, mobile, email, state, city, address, country,
-  ug_college, pg_university, qualification, certifications, subjects_taught, area_of_interest,  
+  ug_college, pg_university, qualifications, qualification, certifications, subjects_taught, area_of_interest,  
   boards_taught, grades_taught, teacher_roles,
   current_location, preferred_location, reason_to_join, where_did_you_hear_about_us,
   current_salary, total_experience, work_experience, skills,
   internal_notes, resume_path, status, resume_original_name
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+
+const TEACHER_UPSERT_BY_ID_SQL = `INSERT INTO teachers (
+  id, name, mobile, email, state, city, address, country,
+  ug_college, pg_university, qualifications, qualification, certifications, subjects_taught, area_of_interest,  
+  boards_taught, grades_taught, teacher_roles,
+  current_location, preferred_location, reason_to_join, where_did_you_hear_about_us,
+  current_salary, total_experience, work_experience, skills,
+  internal_notes, resume_path, status, resume_original_name
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON DUPLICATE KEY UPDATE
+  name=VALUES(name),
+  mobile=VALUES(mobile),
+  email=VALUES(email),
+  state=VALUES(state),
+  city=VALUES(city),
+  address=VALUES(address),
+  country=VALUES(country),
+  ug_college=VALUES(ug_college),
+  pg_university=VALUES(pg_university),
+  qualifications=VALUES(qualifications),
+  qualification=VALUES(qualification),
+  certifications=VALUES(certifications),
+  subjects_taught=VALUES(subjects_taught),
+  area_of_interest=VALUES(area_of_interest),
+  boards_taught=VALUES(boards_taught),
+  grades_taught=VALUES(grades_taught),
+  teacher_roles=VALUES(teacher_roles),
+  current_location=VALUES(current_location),
+  preferred_location=VALUES(preferred_location),
+  reason_to_join=VALUES(reason_to_join),
+  where_did_you_hear_about_us=VALUES(where_did_you_hear_about_us),
+  current_salary=VALUES(current_salary),
+  total_experience=VALUES(total_experience),
+  work_experience=VALUES(work_experience),
+  skills=VALUES(skills),
+  internal_notes=VALUES(internal_notes),
+  resume_path=VALUES(resume_path),
+  status=VALUES(status),
+  resume_original_name=VALUES(resume_original_name)`;
 
 function teacherInsertValues(f, resume_path, resume_original_name) {
   return [
@@ -1190,6 +1283,7 @@ function teacherInsertValues(f, resume_path, resume_original_name) {
     f.country,
     f.ug_college,
     f.pg_university,
+    JSON.stringify(f.qualifications ?? []),
     f.qualification,
     f.certifications,
     JSON.stringify(f.subjects_taught),
@@ -1210,6 +1304,10 @@ function teacherInsertValues(f, resume_path, resume_original_name) {
     f.status,
     resume_original_name,
   ];
+}
+
+function teacherUpsertValuesWithId(id, f, resume_path, resume_original_name) {
+  return [id, ...teacherInsertValues(f, resume_path, resume_original_name)];
 }
 
 async function importTeachersFromExcel(req, res) {
@@ -1249,10 +1347,13 @@ async function importTeachersFromExcel(req, res) {
     sheet: sheetName,
     total_data_rows: rawRows.length,
     created: 0,
+    updated: 0,
+    skipped_duplicate_mobile: 0,
     failed: [],
   };
 
   try {
+    const seenMobiles = new Set(); // last-10 digits within this file
     for (let i = 0; i < rawRows.length; i++) {
       const body = bodyFromExcelRow(rawRows[i]);
       if (!body) continue;
@@ -1272,15 +1373,70 @@ async function importTeachersFromExcel(req, res) {
       const resume = parseResumeImportValue(body.resume_link);
       const f = fieldsFromTeacherBody(body);
       try {
-        await pool.execute(
-          TEACHER_INSERT_SQL,
-          teacherInsertValues(
-            f,
-            resume.resume_path,
-            resume.resume_original_name
-          )
-        );
-        summary.created += 1;
+        const contactId =
+          body.id != null && String(body.id).trim() !== ''
+            ? parseInt(String(body.id), 10)
+            : null;
+
+        // Prevent mobile duplicates (skip row if mobile already exists on a different teacher).
+        const mobKey = last10Digits(f.mobile);
+        if (mobKey) {
+          if (seenMobiles.has(mobKey)) {
+            summary.skipped_duplicate_mobile += 1;
+            summary.failed.push({
+              excel_row: i + 2,
+              reason: 'duplicate_mobile_in_file',
+              mobile: f.mobile,
+            });
+            continue;
+          }
+          seenMobiles.add(mobKey);
+
+          const [dupRows] = await pool.execute(
+            'SELECT id, mobile FROM teachers WHERE mobile LIKE ? LIMIT 10',
+            [`%${mobKey}`]
+          );
+          const match = (dupRows || []).find((r) => last10Digits(r.mobile) === mobKey);
+          if (match) {
+            const existingId = Number(match.id) || null;
+            if (!(contactId && existingId && existingId === contactId)) {
+              summary.skipped_duplicate_mobile += 1;
+              summary.failed.push({
+                excel_row: i + 2,
+                reason: 'duplicate_mobile',
+                mobile: f.mobile,
+                existing_teacher_id: existingId,
+              });
+              continue;
+            }
+          }
+        }
+
+        if (contactId != null && Number.isFinite(contactId) && contactId > 0) {
+          const [result] = await pool.execute(
+            TEACHER_UPSERT_BY_ID_SQL,
+            teacherUpsertValuesWithId(
+              contactId,
+              f,
+              resume.resume_path,
+              resume.resume_original_name
+            )
+          );
+          // MySQL: insert=1, update=2, no-op=0
+          if (result.affectedRows === 1) summary.created += 1;
+          else if (result.affectedRows === 2) summary.updated += 1;
+          else summary.updated += 1;
+        } else {
+          await pool.execute(
+            TEACHER_INSERT_SQL,
+            teacherInsertValues(
+              f,
+              resume.resume_path,
+              resume.resume_original_name
+            )
+          );
+          summary.created += 1;
+        }
       } catch (err) {
         summary.failed.push({
           excel_row: i + 2,
