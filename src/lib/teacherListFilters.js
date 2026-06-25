@@ -11,6 +11,14 @@ function parseQueryList(val) {
     .filter(Boolean);
 }
 
+function normalizeChipValue(v) {
+  const t = String(v || '').trim();
+  if (!t) return '';
+  // UI chips sometimes include prefixes like "Area of Interest (Hard Coded): X"
+  const afterColon = t.includes(':') ? t.split(':').slice(-1)[0].trim() : t;
+  return afterColon.replace(/\s+/g, ' ').trim();
+}
+
 function buildTeacherListWhere(query) {
   const params = [];
   let where = '1=1';
@@ -163,29 +171,49 @@ function buildTeacherListWhere(query) {
     params.push(...values);
   };
 
+  const addJsonContainsAnyAcross = (cols, values) => {
+    if (!values.length) return;
+    const conditions = [];
+    for (const col of cols) {
+      for (let i = 0; i < values.length; i++) {
+        conditions.push(
+          `JSON_CONTAINS(COALESCE(${col}, JSON_ARRAY()), JSON_QUOTE(?))`
+        );
+      }
+    }
+    where += ` AND (${conditions.join(' OR ')})`;
+    for (const col of cols) {
+      for (const v of values) params.push(v);
+    }
+  };
+
   const subjects = parseQueryList(
     query.subjects_taught ?? query.subject_taught ?? query.subject
-  );
+  ).map(normalizeChipValue).filter(Boolean);
   if (subjects.length) addJsonContainsAny('subjects_taught', subjects);
 
-  const boards = parseQueryList(query.board);
+  const boards = parseQueryList(query.board).map(normalizeChipValue).filter(Boolean);
   if (boards.length) addJsonContainsAny('boards_taught', boards);
 
-  const grades = parseQueryList(query.grade);
+  const grades = parseQueryList(query.grade).map(normalizeChipValue).filter(Boolean);
   if (grades.length) addJsonContainsAny('grades_taught', grades);
 
-  const roles = parseQueryList(query.role);
+  const roles = parseQueryList(query.role).map(normalizeChipValue).filter(Boolean);
   if (roles.length) addJsonContainsAny('teacher_roles', roles);
 
   const reasons = parseQueryList(
     query.reason_to_join ?? query.reason ?? query.reasonToJoin
-  );
+  ).map(normalizeChipValue).filter(Boolean);
   if (reasons.length) addJsonContainsAny('reason_to_join', reasons);
 
   const areas = parseQueryList(
     query.areas_of_interest ?? query.area_of_interest ?? query.area
-  );
-  if (areas.length) addJsonContainsAny('area_of_interest', areas);
+  ).map(normalizeChipValue).filter(Boolean);
+  if (areas.length) {
+    // Backward-compat/UX: "area" is used inconsistently in the UI.
+    // Match either stored in area_of_interest OR teacher_roles.
+    addJsonContainsAnyAcross(['area_of_interest', 'teacher_roles'], areas);
+  }
 
   return { where, params };
 }
