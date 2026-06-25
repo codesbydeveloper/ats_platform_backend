@@ -94,12 +94,14 @@ function buildTeacherListWhere(query) {
 
   const qualifications = parseQueryList(query.qualification);
   if (qualifications.length) {
-    for (const q of qualifications) {
-      // New storage: qualifications JSON array. Backward-compat: also check legacy scalar column.
-      where +=
-        ' AND (JSON_CONTAINS(COALESCE(qualifications, JSON_ARRAY()), JSON_QUOTE(?)) OR TRIM(qualification) = ?)';
-      params.push(q, q);
-    }
+    // Any-match: teacher can have ANY of the selected qualifications.
+    where += ` AND (${qualifications
+      .map(
+        () =>
+          '(JSON_CONTAINS(COALESCE(qualifications, JSON_ARRAY()), JSON_QUOTE(?)) OR TRIM(qualification) = ?)'
+      )
+      .join(' OR ')})`;
+    for (const q of qualifications) params.push(q, q);
   }
 
   const certifications = query.certifications ?? query.certification;
@@ -145,36 +147,45 @@ function buildTeacherListWhere(query) {
     params.push(...pgList.map((p) => `%${p}%`));
   }
 
-  const addJsonContains = (col, values) => {
-    for (const v of values) {
+  const addJsonContainsAny = (col, values) => {
+    if (!values.length) return;
+    if (values.length === 1) {
       where += ` AND JSON_CONTAINS(COALESCE(${col}, JSON_ARRAY()), JSON_QUOTE(?))`;
-      params.push(v);
+      params.push(values[0]);
+      return;
     }
+    where += ` AND (${values
+      .map(
+        () =>
+          `JSON_CONTAINS(COALESCE(${col}, JSON_ARRAY()), JSON_QUOTE(?))`
+      )
+      .join(' OR ')})`;
+    params.push(...values);
   };
 
   const subjects = parseQueryList(
     query.subjects_taught ?? query.subject_taught ?? query.subject
   );
-  if (subjects.length) addJsonContains('subjects_taught', subjects);
+  if (subjects.length) addJsonContainsAny('subjects_taught', subjects);
 
   const boards = parseQueryList(query.board);
-  if (boards.length) addJsonContains('boards_taught', boards);
+  if (boards.length) addJsonContainsAny('boards_taught', boards);
 
   const grades = parseQueryList(query.grade);
-  if (grades.length) addJsonContains('grades_taught', grades);
+  if (grades.length) addJsonContainsAny('grades_taught', grades);
 
   const roles = parseQueryList(query.role);
-  if (roles.length) addJsonContains('teacher_roles', roles);
+  if (roles.length) addJsonContainsAny('teacher_roles', roles);
 
   const reasons = parseQueryList(
     query.reason_to_join ?? query.reason ?? query.reasonToJoin
   );
-  if (reasons.length) addJsonContains('reason_to_join', reasons);
+  if (reasons.length) addJsonContainsAny('reason_to_join', reasons);
 
   const areas = parseQueryList(
     query.areas_of_interest ?? query.area_of_interest ?? query.area
   );
-  if (areas.length) addJsonContains('area_of_interest', areas);
+  if (areas.length) addJsonContainsAny('area_of_interest', areas);
 
   return { where, params };
 }

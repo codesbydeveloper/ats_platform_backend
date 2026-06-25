@@ -10,12 +10,4 @@ const pool = mysql.createPool({
   connectionLimit: 10,
 });
 
-// Ensure DB "CURRENT_TIMESTAMP"/NOW() use Indian time (IST) for this app.
-// TIMESTAMP columns are stored in UTC but converted using session time_zone.
-pool.on('connection', (conn) => {
-  conn
-    .query("SET time_zone = '+05:30'")
-    .catch(() => {});
-});
-
 module.exports = pool;

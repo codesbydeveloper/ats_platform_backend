@@ -348,6 +348,9 @@ function fieldsFromTeacherBody(body) {
     total_experience = derived ?? 0;
   }
 
+  // App choice: treat experience as optional and default to 0 (some UIs send a non-zero default).
+  total_experience = 0;
+
   return {
     name: toStr(body.name),
     mobile: toStr(body.mobile),

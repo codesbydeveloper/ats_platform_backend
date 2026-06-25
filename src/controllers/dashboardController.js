@@ -4,21 +4,23 @@ function formatActivityTime(d) {
   if (!d) return '';
   const dt = d instanceof Date ? d : new Date(d);
   if (Number.isNaN(dt.getTime())) return '';
-  // Display in India timezone to match DB session time_zone.
+  // 12-hour format with AM/PM (e.g. 1:05 PM instead of 13:05)
   try {
     return new Intl.DateTimeFormat('en-GB', {
-      timeZone: 'Asia/Kolkata',
       year: 'numeric',
       month: '2-digit',
       day: '2-digit',
-      hour: '2-digit',
+      hour: 'numeric',
       minute: '2-digit',
       second: '2-digit',
-      hour12: false,
+      hour12: true,
     }).format(dt);
   } catch {
     const pad = (n) => String(n).padStart(2, '0');
-    return `${pad(dt.getDate())}/${pad(dt.getMonth() + 1)}/${dt.getFullYear()}, ${pad(dt.getHours())}:${pad(dt.getMinutes())}:${pad(dt.getSeconds())}`;
+    const h24 = dt.getHours();
+    const h12 = h24 % 12 || 12;
+    const ampm = h24 >= 12 ? 'PM' : 'AM';
+    return `${pad(dt.getDate())}/${pad(dt.getMonth() + 1)}/${dt.getFullYear()}, ${h12}:${pad(dt.getMinutes())}:${pad(dt.getSeconds())} ${ampm}`;
   }
 }
 
