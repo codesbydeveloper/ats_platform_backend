@@ -12,6 +12,7 @@ const locationsRoutes = require('./src/routes/locationsRoutes');
 const teacherFormRoutes = require('./src/routes/teacherFormRoutes');
 const settingsRoutes = require('./src/routes/settingsRoutes');
 const smtpRoutes = require('./src/routes/smtpRoutes');
+const tableColumnsRoutes = require('./src/routes/tableColumnsRoutes');
 
 const PORT = Number(process.env.PORT) || 8000;
 const BASE_URL =
@@ -36,6 +37,7 @@ app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/locations', locationsRoutes);
 app.use('/api/settings', settingsRoutes);
 app.use('/api/smtp', smtpRoutes);
+app.use('/api/table-columns', tableColumnsRoutes);
 
 app.listen(PORT, () => {
   console.log(`server is running on ${PORT} `);

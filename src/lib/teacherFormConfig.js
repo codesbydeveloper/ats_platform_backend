@@ -12,6 +12,10 @@ const FIELD_TYPES = new Set([
   'date',
   'boolean',
   'work_experience',
+  'countries_states_cities',
+  'countries',
+  'indian_states',
+  'indian_cities',
 ]);
 
 function slugifyId(raw, fallback = 'item') {

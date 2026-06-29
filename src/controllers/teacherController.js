@@ -91,7 +91,16 @@ function last10Digits(v) {
 }
 
 function toNum(v, fallback = 0) {
-  const n = Number(v);
+  if (v == null) return fallback;
+  if (typeof v === 'number') {
+    return Number.isFinite(v) ? v : fallback;
+  }
+  const t = String(v).trim();
+  if (!t) return fallback;
+  // Accept values like "10", "10.5", "10 yrs", "₹ 50,000", etc.
+  const m = t.replace(/,/g, '').match(/-?\d+(?:\.\d+)?/);
+  if (!m) return fallback;
+  const n = Number(m[0]);
   return Number.isFinite(n) ? n : fallback;
 }
 
@@ -235,6 +244,26 @@ function buildBodyFromFlatMultipart(body) {
     }
   }
 
+  const cf = body.custom_fields ?? body.customFields;
+  if (cf != null && String(cf).trim() !== '') {
+    const raw = String(cf).trim();
+    try {
+      const parsed = JSON.parse(raw);
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        return {
+          success: false,
+          error: 'custom_fields must be a JSON object',
+        };
+      }
+      out.custom_fields = parsed;
+    } catch {
+      return {
+        success: false,
+        error: 'custom_fields must be valid JSON (object)',
+      };
+    }
+  }
+
   return { success: true, data: out };
 }
 
@@ -276,7 +305,23 @@ function normalizeStatus(v) {
 
 function parseCustomFields(body) {
   const raw = body.custom_fields ?? body.customFields;
-  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+  if (raw == null) return {};
+
+  if (typeof raw === 'string') {
+    const t = raw.trim();
+    if (!t) return {};
+    try {
+      const parsed = JSON.parse(t);
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        return parseCustomFields({ custom_fields: parsed });
+      }
+      return {};
+    } catch {
+      return {};
+    }
+  }
+
+  if (typeof raw !== 'object' || Array.isArray(raw)) {
     return {};
   }
   const out = {};
@@ -348,9 +393,6 @@ function fieldsFromTeacherBody(body) {
     total_experience = derived ?? 0;
   }
 
-  // App choice: treat experience as optional and default to 0 (some UIs send a non-zero default).
-  total_experience = 0;
-
   return {
     name: toStr(body.name),
     mobile: toStr(body.mobile),
@@ -383,6 +425,7 @@ function fieldsFromTeacherBody(body) {
     total_experience,
     work_experience,
     skills: toStringArray(body.skills),
+    custom_fields: parseCustomFields(body),
     internal_notes:
       body.internal_notes != null
         ? String(body.internal_notes)
@@ -538,6 +581,7 @@ function rowToPatchBase(row) {
       row.total_experience != null ? Number(row.total_experience) : 0,
     work_experience: parseStoredWorkExp(row.work_experience),
     skills: parseStoredJsonArray(row.skills),
+    custom_fields: parseStoredCustomFields(row.custom_fields),
     internal_notes: row.internal_notes != null ? String(row.internal_notes) : '',
     status: row.status || 'active',
   };
@@ -594,7 +638,7 @@ async function updateTeacher(req, res) {
     boards_taught=?, grades_taught=?, teacher_roles=?,
     current_location=?, preferred_location=?, reason_to_join=?, where_did_you_hear_about_us=?,
     current_salary=?, total_experience=?, work_experience=?, skills=?,
-    internal_notes=?, resume_path=?, status=?, resume_original_name=?
+    internal_notes=?, custom_fields=?, resume_path=?, status=?, resume_original_name=?
     WHERE id=?`;
 
     await pool.execute(sql, [
@@ -624,6 +668,7 @@ async function updateTeacher(req, res) {
       JSON.stringify(f.work_experience),
       JSON.stringify(f.skills),
       f.internal_notes,
+      JSON.stringify(f.custom_fields ?? {}),
       resume_path,
       f.status,
       resume_original_name,
@@ -832,6 +877,7 @@ function mapTeacherRow(row) {
     row.qualifications != null
       ? jsonToArray(row.qualifications)
       : toStringArray(row.qualification);
+  const custom_fields = parseStoredCustomFields(row.custom_fields);
 
   const resume_path = row.resume_path || null;
   const resumeOriginal = row.resume_original_name || null;
@@ -883,6 +929,7 @@ function mapTeacherRow(row) {
     teacher_roles,
     work_experience,
     skills,
+    custom_fields,
     internal_notes: row.internal_notes,
     resume_path,
     resume_original_name: resumeOriginal,
@@ -1233,8 +1280,8 @@ const TEACHER_INSERT_SQL = `INSERT INTO teachers (
   boards_taught, grades_taught, teacher_roles,
   current_location, preferred_location, reason_to_join, where_did_you_hear_about_us,
   current_salary, total_experience, work_experience, skills,
-  internal_notes, resume_path, status, resume_original_name
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+  internal_notes, custom_fields, resume_path, status, resume_original_name
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
 
 const TEACHER_UPSERT_BY_ID_SQL = `INSERT INTO teachers (
   id, name, mobile, email, state, city, address, country,
@@ -1242,8 +1289,8 @@ const TEACHER_UPSERT_BY_ID_SQL = `INSERT INTO teachers (
   boards_taught, grades_taught, teacher_roles,
   current_location, preferred_location, reason_to_join, where_did_you_hear_about_us,
   current_salary, total_experience, work_experience, skills,
-  internal_notes, resume_path, status, resume_original_name
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  internal_notes, custom_fields, resume_path, status, resume_original_name
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON DUPLICATE KEY UPDATE
   name=VALUES(name),
   mobile=VALUES(mobile),
@@ -1271,6 +1318,7 @@ ON DUPLICATE KEY UPDATE
   work_experience=VALUES(work_experience),
   skills=VALUES(skills),
   internal_notes=VALUES(internal_notes),
+  custom_fields=VALUES(custom_fields),
   resume_path=VALUES(resume_path),
   status=VALUES(status),
   resume_original_name=VALUES(resume_original_name)`;
@@ -1303,6 +1351,7 @@ function teacherInsertValues(f, resume_path, resume_original_name) {
     JSON.stringify(f.work_experience),
     JSON.stringify(f.skills),
     f.internal_notes,
+    JSON.stringify(f.custom_fields ?? {}),
     resume_path,
     f.status,
     resume_original_name,
