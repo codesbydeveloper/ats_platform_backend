@@ -6,6 +6,11 @@ const {
   findField,
   slugifyId,
   FIELD_TYPES,
+  resolveFieldType,
+  parseOptionsInput,
+  normalizeFieldKey,
+  applyFieldTypeRules,
+  fieldToApi,
 } = require('../lib/teacherFormConfig');
 
 function toFilterFlag(val) {
@@ -270,8 +275,9 @@ async function addField(req, res) {
     return res.status(400).json({ error: 'Field label is required' });
   }
 
-  const type = body.type != null ? String(body.type) : 'text';
-  if (!FIELD_TYPES.has(type)) {
+  const typeRaw = body.type != null ? String(body.type) : 'text';
+  const resolvedType = resolveFieldType(typeRaw);
+  if (!resolvedType) {
     return res.status(400).json({
       error: 'Invalid field type',
       allowed: [...FIELD_TYPES],
@@ -285,7 +291,14 @@ async function addField(req, res) {
       return res.status(404).json({ error: 'Section not found' });
     }
 
-    const key = slugifyId(body.key || label, 'field').replace(/-/g, '_');
+    const key =
+      normalizeFieldKey(body.key, label) ||
+      slugifyId(body.key || label, 'field').replace(/-/g, '_');
+    if (!key || key.includes(',')) {
+      return res.status(400).json({
+        error: 'Enter one field key (no commas). Use the work-role bundle for multiple fields.',
+      });
+    }
     if (findField(config, key)) {
       return res.status(409).json({ error: 'Field key already exists', key });
     }
@@ -295,18 +308,21 @@ async function addField(req, res) {
       -1
     );
 
-    const field = {
-      id: slugifyId(body.id || key, 'field'),
-      key,
-      label,
-      type,
-      required: Boolean(body.required),
-      filter: toFilterFlag(body.filter),
-      builtIn: false,
-      mapsTo: null,
-      options: Array.isArray(body.options) ? body.options : [],
-      sortOrder: maxOrder + 1,
-    };
+    const field = fieldToApi(
+      applyFieldTypeRules({
+        id: slugifyId(body.id || key, 'field'),
+        key,
+        label,
+        type: resolvedType,
+        required: Boolean(body.required),
+        filter: toFilterFlag(body.filter),
+        builtIn: false,
+        mapsTo: null,
+        options: parseOptionsInput(body.options),
+        categorySlug: body.categorySlug ?? body.category_slug ?? null,
+        sortOrder: maxOrder + 1,
+      })
+    );
 
     section.fields.push(field);
     const saved = await saveTeacherFormConfig(config);
@@ -335,21 +351,21 @@ async function updateField(req, res) {
 
     const { field } = hit;
     if (body.label != null) {
-      const label = String(body.label).trim();
-      if (!label) {
+      const nextLabel = String(body.label).trim();
+      if (!nextLabel) {
         return res.status(400).json({ error: 'Field label cannot be empty' });
       }
-      field.label = label;
+      field.label = nextLabel;
     }
     if (body.type != null) {
-      const type = String(body.type);
-      if (!FIELD_TYPES.has(type)) {
+      const resolvedType = resolveFieldType(body.type);
+      if (!resolvedType) {
         return res.status(400).json({
           error: 'Invalid field type',
           allowed: [...FIELD_TYPES],
         });
       }
-      field.type = type;
+      field.type = resolvedType;
     }
     if (body.required !== undefined) {
       field.required = Boolean(body.required);
@@ -358,8 +374,9 @@ async function updateField(req, res) {
       field.filter = toFilterFlag(body.filter);
     }
     if (body.options !== undefined) {
-      field.options = Array.isArray(body.options) ? body.options : [];
+      field.options = parseOptionsInput(body.options);
     }
+    Object.assign(field, fieldToApi(applyFieldTypeRules(field)));
     if (body.sortOrder != null && Number.isFinite(Number(body.sortOrder))) {
       field.sortOrder = Number(body.sortOrder);
     }
