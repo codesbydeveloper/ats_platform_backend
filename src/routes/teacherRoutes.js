@@ -10,6 +10,8 @@ const {
   updateTeacher,
   deleteTeacher,
   importTeachersFromExcel,
+  getTeacherImportColumns,
+  downloadTeacherImportTemplate,
   exportTeachers,
   bulkDeleteTeachers,
 } = require('../controllers/teacherController');
@@ -58,6 +60,8 @@ router.post('/parse-resume', uploadResumeMem.single('resume'), parseResume);
 router.get('/', listTeachers);
 router.get('/export', exportTeachers);
 router.post('/export', exportTeachers);
+router.get('/import/columns', getTeacherImportColumns);
+router.get('/import/template', downloadTeacherImportTemplate);
 router.post('/bulk-delete', bulkDeleteTeachers);
 router.get('/:id/resume/download', downloadTeacherResume);
 router.get('/:id', getTeacherById);

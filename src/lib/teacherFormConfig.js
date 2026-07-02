@@ -16,6 +16,14 @@ const FIELD_TYPES = new Set([
   'countries',
   'indian_states',
   'indian_cities',
+  'teacher_roles',
+]);
+
+const LOCATION_FIELD_TYPES = new Set([
+  'countries',
+  'indian_states',
+  'indian_cities',
+  'countries_states_cities',
 ]);
 
 const FIELD_TYPE_ALIASES = {
@@ -92,13 +100,40 @@ function isTeacherRoleField(key, label) {
   return l === 'teacher role' || l === 'teacher roles';
 }
 
+function normalizeMultipleFlag(raw) {
+  if (raw === true || raw === 1 || raw === '1') return true;
+  if (raw === false || raw === 0 || raw === '0') return false;
+  const s = String(raw ?? '')
+    .trim()
+    .toLowerCase();
+  if (s === 'multiple' || s === 'multiselect' || s === 'multi') return true;
+  if (s === 'single' || s === 'select') return false;
+  return undefined;
+}
+
+function resolveMultipleInput(field) {
+  if (field.multiple !== undefined) {
+    return normalizeMultipleFlag(field.multiple);
+  }
+  if (field.selection_mode != null) {
+    return normalizeMultipleFlag(field.selection_mode);
+  }
+  if (field.selectionMode != null) {
+    return normalizeMultipleFlag(field.selectionMode);
+  }
+  return undefined;
+}
+
 function applyFieldTypeRules(field) {
   const next = { ...field };
   let type = resolveFieldType(next.type) || next.type;
+  const explicitMultiple = resolveMultipleInput(next);
 
   if (isTeacherRoleField(next.key, next.label)) {
-    type = 'multiselect';
     next.categorySlug = next.categorySlug || 'teacher-roles';
+    if (!type || type === 'text') {
+      type = explicitMultiple === false ? 'select' : 'multiselect';
+    }
   } else if (next.key === 'country' || next.key === 'countries') {
     if (!type || type === 'text') type = 'countries';
   } else if (next.key === 'state' || String(next.key).endsWith('_state')) {
@@ -112,6 +147,16 @@ function applyFieldTypeRules(field) {
   }
 
   next.type = type;
+
+  if (LOCATION_FIELD_TYPES.has(type)) {
+    next.multiple =
+      explicitMultiple !== undefined
+        ? explicitMultiple === true
+        : Boolean(next.multiple);
+  } else {
+    delete next.multiple;
+  }
+
   return next;
 }
 
@@ -130,6 +175,9 @@ function fieldToApi(field) {
     mapTo: field.mapsTo,
     options: Array.isArray(field.options) ? field.options : [],
     categorySlug: field.categorySlug ?? null,
+    ...(LOCATION_FIELD_TYPES.has(field.type)
+      ? { multiple: Boolean(field.multiple) }
+      : {}),
   };
 }
 
@@ -164,6 +212,8 @@ function normalizeField(field, sortOrder = 0) {
     sortOrder: Number.isFinite(Number(field.sortOrder ?? field.sort_order))
       ? Number(field.sortOrder ?? field.sort_order)
       : sortOrder,
+    multiple: field.multiple,
+    selection_mode: field.selection_mode ?? field.selectionMode,
   });
 
   return fieldToApi(normalized);
@@ -274,10 +324,12 @@ function findField(config, fieldKey) {
 
 module.exports = {
   FIELD_TYPES,
+  LOCATION_FIELD_TYPES,
   FIELD_TYPE_ALIASES,
   slugifyId,
   normalizeFieldKey,
   resolveFieldType,
+  normalizeMultipleFlag,
   parseOptionsInput,
   applyFieldTypeRules,
   fieldToApi,

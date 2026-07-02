@@ -111,7 +111,23 @@ function resumeLinkDisplayName(url) {
   }
 }
 
-/** Read Resume URL from Excel cell (plain text or HYPERLINK formula). */
+function resumeFileBasename(filePath) {
+  const p = String(filePath || '')
+    .trim()
+    .replace(/\\/g, '/');
+  const parts = p.split('/').filter(Boolean);
+  return parts[parts.length - 1] || '';
+}
+
+function normalizeResumeFilePath(raw) {
+  let p = normalizeImportedUrl(raw).replace(/\\/g, '/');
+  if (!p || isHttpUrl(p)) return p;
+  if (p.startsWith('./')) p = p.slice(1);
+  if (!p.startsWith('/') && p.includes('/')) p = `/${p}`;
+  return p;
+}
+
+/** Read Resume link/path from Excel cell (plain text or HYPERLINK formula). */
 function extractCellLink(cell) {
   if (!cell) return '';
   if (cell.l && cell.l.Target) return normalizeImportedUrl(cell.l.Target);
@@ -125,7 +141,7 @@ function extractCellLink(cell) {
       : cell.w != null
         ? String(cell.w).trim()
         : '';
-  if (isHttpUrl(v)) return normalizeImportedUrl(v);
+  if (v) return normalizeImportedUrl(v);
   return '';
 }
 
@@ -153,7 +169,11 @@ function enrichRowsWithResumeLinks(sheet, rawRows) {
   });
 }
 
-/** Resume column on import: URL → resume_path, file name only → resume_original_name. */
+/**
+ * Resume column on import:
+ * - http(s) URL → full URL in resume_path, friendly label in resume_original_name
+ * - file path e.g. /uploads/files/PravinKumar.pdf → full path in resume_path, PravinKumar.pdf in resume_original_name
+ */
 function parseResumeImportValue(raw) {
   const t = normalizeImportedUrl(raw);
   if (!t) return { resume_path: null, resume_original_name: null };
@@ -163,19 +183,18 @@ function parseResumeImportValue(raw) {
       resume_original_name: resumeLinkDisplayName(t),
     };
   }
-  return { resume_path: null, resume_original_name: t };
+  const resume_path = normalizeResumeFilePath(t);
+  const resume_original_name = resumeFileBasename(resume_path) || resume_path;
+  return { resume_path, resume_original_name };
 }
 
 function resumeLabel(row) {
   const pathStr = row.resume_path != null ? String(row.resume_path).trim() : '';
-  if (isHttpUrl(pathStr)) return pathStr;
-  if (row.resume_original_name) return String(row.resume_original_name);
-  if (pathStr) {
-    const p = pathStr.replace(/\\/g, '/');
-    const parts = p.split('/');
-    return parts[parts.length - 1] || '';
+  if (!pathStr) {
+    return row.resume_original_name ? String(row.resume_original_name) : '';
   }
-  return '';
+  if (isHttpUrl(pathStr)) return pathStr;
+  return pathStr;
 }
 
 function universitiesExport(row) {

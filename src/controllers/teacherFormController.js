@@ -320,6 +320,8 @@ async function addField(req, res) {
         mapsTo: null,
         options: parseOptionsInput(body.options),
         categorySlug: body.categorySlug ?? body.category_slug ?? null,
+        multiple: body.multiple,
+        selection_mode: body.selection_mode ?? body.selectionMode,
         sortOrder: maxOrder + 1,
       })
     );
@@ -375,6 +377,12 @@ async function updateField(req, res) {
     }
     if (body.options !== undefined) {
       field.options = parseOptionsInput(body.options);
+    }
+    if (body.multiple !== undefined) {
+      field.multiple = body.multiple;
+    }
+    if (body.selection_mode !== undefined || body.selectionMode !== undefined) {
+      field.selection_mode = body.selection_mode ?? body.selectionMode;
     }
     Object.assign(field, fieldToApi(applyFieldTypeRules(field)));
     if (body.sortOrder != null && Number.isFinite(Number(body.sortOrder))) {

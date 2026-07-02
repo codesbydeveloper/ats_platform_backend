@@ -1362,6 +1362,63 @@ function teacherUpsertValuesWithId(id, f, resume_path, resume_original_name) {
   return [id, ...teacherInsertValues(f, resume_path, resume_original_name)];
 }
 
+function sendTeacherImportTemplate(res) {
+  const wb = XLSX.utils.book_new();
+  const ws = XLSX.utils.json_to_sheet([EXPORT_EMPTY_ROW], {
+    header: EXCEL_HEADERS,
+  });
+  XLSX.utils.book_append_sheet(wb, ws, 'Teachers');
+  const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+  res.setHeader(
+    'Content-Type',
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+  );
+  res.setHeader(
+    'Content-Disposition',
+    'attachment; filename="teacher-import-template.xlsx"'
+  );
+  res.setHeader(
+    'Access-Control-Expose-Headers',
+    'Content-Disposition, Content-Length'
+  );
+  return res.send(buf);
+}
+
+function getTeacherImportColumns(_req, res) {
+  return res.json({
+    columns: EXCEL_HEADERS,
+    count: EXCEL_HEADERS.length,
+    resume_column: 'Resume',
+    resume_hint:
+      'Paste a Google Docs/Drive link or any public resume URL in the Resume column.',
+  });
+}
+
+function downloadTeacherImportTemplate(_req, res) {
+  return sendTeacherImportTemplate(res);
+}
+
+async function resolveImportResume(body, contactId) {
+  const resume = parseResumeImportValue(body.resume_link);
+  if (resume.resume_path || resume.resume_original_name) {
+    return { ...resume, imported: true };
+  }
+  if (contactId != null && Number.isFinite(contactId) && contactId > 0) {
+    const [rows] = await pool.execute(
+      'SELECT resume_path, resume_original_name FROM teachers WHERE id = ? LIMIT 1',
+      [contactId]
+    );
+    if (rows.length) {
+      return {
+        resume_path: rows[0].resume_path || null,
+        resume_original_name: rows[0].resume_original_name || null,
+        imported: false,
+      };
+    }
+  }
+  return { resume_path: null, resume_original_name: null, imported: false };
+}
+
 async function importTeachersFromExcel(req, res) {
   if (!req.file || !req.file.buffer) {
     return res.status(400).json({
@@ -1397,9 +1454,11 @@ async function importTeachersFromExcel(req, res) {
 
   const summary = {
     sheet: sheetName,
+    columns: EXCEL_HEADERS,
     total_data_rows: rawRows.length,
     created: 0,
     updated: 0,
+    resumes_set: 0,
     skipped_duplicate_mobile: 0,
     failed: [],
   };
@@ -1422,13 +1481,14 @@ async function importTeachersFromExcel(req, res) {
         continue;
       }
 
-      const resume = parseResumeImportValue(body.resume_link);
       const f = fieldsFromTeacherBody(body);
       try {
         const contactId =
           body.id != null && String(body.id).trim() !== ''
             ? parseInt(String(body.id), 10)
             : null;
+        const resume = await resolveImportResume(body, contactId);
+        if (resume.imported) summary.resumes_set += 1;
 
         // Prevent mobile duplicates (skip row if mobile already exists on a different teacher).
         const mobKey = last10Digits(f.mobile);
@@ -1526,6 +1586,8 @@ module.exports = {
   downloadTeacherResume,
   updateTeacher,
   deleteTeacher,
+  getTeacherImportColumns,
+  downloadTeacherImportTemplate,
   importTeachersFromExcel,
   exportTeachers,
   bulkDeleteTeachers,
