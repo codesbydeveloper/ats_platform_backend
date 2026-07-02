@@ -1440,6 +1440,20 @@ async function resolveImportCustomFields(contactId, parsedCustomFields, preferre
   return custom_fields;
 }
 
+function ensureImportRowDefaults(body, excelRow) {
+  const out = { ...body };
+  if (!String(out.name || '').trim()) {
+    out.name = `Teacher Row ${excelRow}`;
+  }
+  if (!String(out.email || '').trim()) {
+    out.email = `import-row-${excelRow}@import.local`;
+  }
+  if (!String(out.mobile || '').trim()) {
+    out.mobile = `9${String(excelRow).padStart(9, '0').slice(-9)}`;
+  }
+  return out;
+}
+
 async function importTeachersFromExcel(req, res) {
   if (!req.file || !req.file.buffer) {
     return res.status(400).json({
@@ -1484,20 +1498,11 @@ async function importTeachersFromExcel(req, res) {
 
   try {
     for (let i = 0; i < rawRows.length; i++) {
-      const body = bodyFromExcelRow(rawRows[i]);
-      if (!body) continue;
-
-      const missing = REQUIRED.filter(
-        (k) => body[k] == null || String(body[k]).trim() === ''
+      const excelRow = i + 2;
+      const body = ensureImportRowDefaults(
+        bodyFromExcelRow(rawRows[i]) || {},
+        excelRow
       );
-      if (missing.length) {
-        summary.failed.push({
-          excel_row: i + 2,
-          reason: 'missing_required',
-          fields: missing,
-        });
-        continue;
-      }
 
       const f = fieldsFromTeacherBody(body);
       try {
@@ -1522,7 +1527,7 @@ async function importTeachersFromExcel(req, res) {
         summary.created += 1;
       } catch (err) {
         summary.failed.push({
-          excel_row: i + 2,
+          excel_row: excelRow,
           reason: err.message || 'insert_failed',
           code: err.code,
         });

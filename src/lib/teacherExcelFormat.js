@@ -430,9 +430,6 @@ function bodyFromExcelRow(row) {
     'MOBILE',
     'phone',
   ]);
-  if (!name && !email && !mobile) {
-    return null;
-  }
 
   const state_id = pickExcelColumn(row, ['state_id', 'state id']);
   const city_id = pickExcelColumn(row, ['city_id', 'city id']);
