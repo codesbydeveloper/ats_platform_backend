@@ -148,8 +148,28 @@ function normalizeResumeFilePath(raw) {
   let p = normalizeImportedUrl(raw).replace(/\\/g, '/');
   if (!p || isHttpUrl(p)) return p;
   if (p.startsWith('./')) p = p.slice(1);
-  if (!p.startsWith('/') && p.includes('/')) p = `/${p}`;
+  if (!p.includes('/')) {
+    p = `/uploads/files/${p}`;
+  } else if (!p.startsWith('/')) {
+    p = `/${p}`;
+  }
   return p;
+}
+
+function resumeOriginalNameFromStoredPath(pathOrUrl) {
+  const t = String(pathOrUrl || '').trim();
+  if (!t) return '';
+  if (isHttpUrl(t)) {
+    try {
+      const u = new URL(t);
+      const base = resumeFileBasename(decodeURIComponent(u.pathname));
+      if (base) return base;
+    } catch {
+      /* fall through */
+    }
+    return resumeLinkDisplayName(t);
+  }
+  return resumeFileBasename(t) || t;
 }
 
 /** Read Resume link/path from Excel cell (plain text or HYPERLINK formula). */
@@ -196,8 +216,9 @@ function enrichRowsWithResumeLinks(sheet, rawRows) {
 
 /**
  * Resume column on import:
- * - http(s) URL → full URL in resume_path, friendly label in resume_original_name
- * - file path e.g. /uploads/files/PravinKumar.pdf → full path in resume_path, PravinKumar.pdf in resume_original_name
+ * - file path e.g. /uploads/files/name.pdf → full path in resume_path, name.pdf in resume_original_name
+ * - bare filename → /uploads/files/name.pdf + name.pdf in resume_original_name
+ * - http(s) URL → full URL in resume_path, filename from URL path when available
  */
 function parseResumeImportValue(raw) {
   const t = normalizeImportedUrl(raw);
@@ -205,11 +226,11 @@ function parseResumeImportValue(raw) {
   if (isHttpUrl(t)) {
     return {
       resume_path: t,
-      resume_original_name: resumeLinkDisplayName(t),
+      resume_original_name: resumeOriginalNameFromStoredPath(t),
     };
   }
   const resume_path = normalizeResumeFilePath(t);
-  const resume_original_name = resumeFileBasename(resume_path) || resume_path;
+  const resume_original_name = resumeOriginalNameFromStoredPath(resume_path);
   return { resume_path, resume_original_name };
 }
 

@@ -1478,14 +1478,11 @@ async function importTeachersFromExcel(req, res) {
     columns: EXCEL_HEADERS,
     total_data_rows: rawRows.length,
     created: 0,
-    updated: 0,
     resumes_set: 0,
-    skipped_duplicate_mobile: 0,
     failed: [],
   };
 
   try {
-    const seenMobiles = new Set(); // last-10 digits within this file
     for (let i = 0; i < rawRows.length; i++) {
       const body = bodyFromExcelRow(rawRows[i]);
       if (!body) continue;
@@ -1504,77 +1501,25 @@ async function importTeachersFromExcel(req, res) {
 
       const f = fieldsFromTeacherBody(body);
       try {
-        const contactId =
-          body.id != null && String(body.id).trim() !== ''
-            ? parseInt(String(body.id), 10)
-            : null;
         f.custom_fields = await resolveImportCustomFields(
-          contactId,
+          null,
           f.custom_fields,
           f.preferred_location
         );
-        const resume = await resolveImportResume(body, contactId);
-        if (resume.imported) summary.resumes_set += 1;
-
-        // Prevent mobile duplicates (skip row if mobile already exists on a different teacher).
-        const mobKey = last10Digits(f.mobile);
-        if (mobKey) {
-          if (seenMobiles.has(mobKey)) {
-            summary.skipped_duplicate_mobile += 1;
-            summary.failed.push({
-              excel_row: i + 2,
-              reason: 'duplicate_mobile_in_file',
-              mobile: f.mobile,
-            });
-            continue;
-          }
-          seenMobiles.add(mobKey);
-
-          const [dupRows] = await pool.execute(
-            'SELECT id, mobile FROM teachers WHERE mobile LIKE ? LIMIT 10',
-            [`%${mobKey}`]
-          );
-          const match = (dupRows || []).find((r) => last10Digits(r.mobile) === mobKey);
-          if (match) {
-            const existingId = Number(match.id) || null;
-            if (!(contactId && existingId && existingId === contactId)) {
-              summary.skipped_duplicate_mobile += 1;
-              summary.failed.push({
-                excel_row: i + 2,
-                reason: 'duplicate_mobile',
-                mobile: f.mobile,
-                existing_teacher_id: existingId,
-              });
-              continue;
-            }
-          }
+        const resume = parseResumeImportValue(body.resume_link);
+        if (resume.resume_path || resume.resume_original_name) {
+          summary.resumes_set += 1;
         }
 
-        if (contactId != null && Number.isFinite(contactId) && contactId > 0) {
-          const [result] = await pool.execute(
-            TEACHER_UPSERT_BY_ID_SQL,
-            teacherUpsertValuesWithId(
-              contactId,
-              f,
-              resume.resume_path,
-              resume.resume_original_name
-            )
-          );
-          // MySQL: insert=1, update=2, no-op=0
-          if (result.affectedRows === 1) summary.created += 1;
-          else if (result.affectedRows === 2) summary.updated += 1;
-          else summary.updated += 1;
-        } else {
-          await pool.execute(
-            TEACHER_INSERT_SQL,
-            teacherInsertValues(
-              f,
-              resume.resume_path,
-              resume.resume_original_name
-            )
-          );
-          summary.created += 1;
-        }
+        await pool.execute(
+          TEACHER_INSERT_SQL,
+          teacherInsertValues(
+            f,
+            resume.resume_path,
+            resume.resume_original_name
+          )
+        );
+        summary.created += 1;
       } catch (err) {
         summary.failed.push({
           excel_row: i + 2,
