@@ -1419,8 +1419,8 @@ async function resolveImportResume(body, contactId) {
   return { resume_path: null, resume_original_name: null, imported: false };
 }
 
-async function resolveImportCustomFields(body, contactId, preferredLocation) {
-  let custom_fields = parseCustomFields(body);
+async function resolveImportCustomFields(contactId, parsedCustomFields, preferredLocation) {
+  let custom_fields = { ...(parsedCustomFields || {}) };
   if (contactId != null && Number.isFinite(contactId) && contactId > 0) {
     const [rows] = await pool.execute(
       'SELECT custom_fields FROM teachers WHERE id = ? LIMIT 1',
@@ -1509,8 +1509,8 @@ async function importTeachersFromExcel(req, res) {
             ? parseInt(String(body.id), 10)
             : null;
         f.custom_fields = await resolveImportCustomFields(
-          body,
           contactId,
+          f.custom_fields,
           f.preferred_location
         );
         const resume = await resolveImportResume(body, contactId);

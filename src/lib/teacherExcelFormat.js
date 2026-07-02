@@ -6,6 +6,31 @@
 const XLSX = require('xlsx');
 
 const EXCEL_HEADERS = [
+  'roll_no',
+  'teacher_name',
+  'mobile_no',
+  'email',
+  'country',
+  'state_id',
+  'city_id',
+  'address',
+  'college_attended_ug',
+  'universities_attended_pg',
+  'education_qualifications',
+  'qualifications_certificates',
+  'subjects_taught',
+  'boards_taught',
+  'grades_taught',
+  'source',
+  'preferred_location',
+  'roles',
+  'current_location_id',
+  'areas_of_interest',
+  'resume',
+];
+
+/** Legacy Tree Learning template headers (still accepted on import). */
+const LEGACY_EXCEL_HEADERS = [
   'CONTACT ID',
   'NAME',
   'MOBILE',
@@ -220,27 +245,58 @@ function teacherRowToExcelExport(row) {
   const boards = parseJsonArray(row.boards_taught);
   const grades = parseJsonArray(row.grades_taught);
   const roles = parseJsonArray(row.teacher_roles);
+  const areas = parseJsonArray(row.area_of_interest);
   const skills = parseJsonArray(row.skills);
   const subjects = parseJsonArray(row.subjects_taught);
   const qualifications = parseJsonArray(row.qualifications);
+  const customObj =
+    row.custom_fields != null &&
+    typeof row.custom_fields === 'object' &&
+    !Array.isArray(row.custom_fields)
+      ? row.custom_fields
+      : typeof row.custom_fields === 'string'
+        ? (() => {
+            try {
+              const p = JSON.parse(row.custom_fields);
+              return p && typeof p === 'object' && !Array.isArray(p) ? p : {};
+            } catch {
+              return {};
+            }
+          })()
+        : {};
 
   return {
-    'CONTACT ID': row.id != null ? formatTeacherCode(row.id) : '',
-    NAME: row.name || '',
-    MOBILE: row.mobile || '',
-    EMAIL: row.email || '',
-    CITY: row.city || '',
-    'PREFERRED CITIES': row.preferred_location || '',
-    'UNIVERSITIES / COLLEGES ATTENDED': universitiesExport(row),
-    'EDUCATIONAL QUALIFICATION': joinList(qualifications) || row.qualification || '',
-    'SUBJECTS TAUGHT': joinList(subjects),
-    TAGS: joinList(skills),
-    'QUALIFICATION CERTIFICATION': row.certifications || '',
-    'GRADES TAUGHT': joinList(grades),
-    'BOARDS TAUGHT': joinList(boards),
-    NOTES: row.internal_notes || '',
-    'TEACHER ROLES': joinList(roles),
-    Resume: resumeLabel(row),
+    roll_no: row.id != null ? formatTeacherCode(row.id) : '',
+    teacher_name: row.name || '',
+    mobile_no: row.mobile || '',
+    email: row.email || '',
+    country: row.country || '',
+    state_id: customObj.state_id != null ? String(customObj.state_id) : '',
+    city_id: customObj.city_id != null ? String(customObj.city_id) : row.city || '',
+    address: row.address != null ? String(row.address) : '',
+    college_attended_ug: row.ug_college || '',
+    universities_attended_pg: row.pg_university || '',
+    education_qualifications:
+      joinList(qualifications) || row.qualification || '',
+    qualifications_certificates: row.certifications || '',
+    subjects_taught: joinList(subjects),
+    boards_taught: joinList(boards),
+    grades_taught: joinList(grades),
+    source: joinList(parseJsonArray(row.where_did_you_hear_about_us)),
+    preferred_location:
+      row.preferred_location ||
+      customObj.preffered_location ||
+      '',
+    roles:
+      joinList(areas) ||
+      joinList(customFieldMultiList(customObj.areas_of_interest)) ||
+      joinList(roles),
+    current_location_id:
+      customObj.current_location_id != null
+        ? String(customObj.current_location_id)
+        : row.current_location || '',
+    areas_of_interest: joinList(customFieldMultiList(customObj.candidate_roles)),
+    resume: resumeLabel(row),
   };
 }
 
@@ -280,7 +336,6 @@ function parseContactId(raw) {
   const n = t.toLowerCase();
   if (n === 'na' || n === 'n/a' || n === 'nil' || n === 'none' || n === '-') return null;
 
-  // Accept "TCH-00012" (export format) or plain numeric.
   const m = t.match(/tch\s*-\s*0*([0-9]+)/i);
   const digits = m && m[1] ? m[1] : t.replace(/[^\d]/g, '');
   if (!digits) return null;
@@ -288,9 +343,50 @@ function parseContactId(raw) {
   return Number.isFinite(id) && id > 0 ? id : null;
 }
 
+function isNewExcelImportFormat(row) {
+  const keys = Object.keys(row).map((k) => normalizeExcelHeader(k));
+  return ['roll_no', 'teacher_name', 'mobile_no'].some((h) => keys.includes(h));
+}
+
+function buildImportCustomFields({
+  state_id,
+  city_id,
+  preferred_location,
+  rolesRaw,
+  areasOfInterestRaw,
+  current_location_id,
+}) {
+  const custom_fields = {};
+  if (state_id) custom_fields.state_id = state_id;
+  if (city_id) custom_fields.city_id = city_id;
+  if (preferred_location) custom_fields.preffered_location = preferred_location;
+  const roles = splitMultiValue(rolesRaw);
+  if (roles.length) custom_fields.areas_of_interest = roles;
+  const candidateRoles = splitMultiValue(areasOfInterestRaw);
+  if (candidateRoles.length) custom_fields.candidate_roles = candidateRoles;
+  if (current_location_id) {
+    custom_fields.current_location_id = current_location_id;
+    if (!preferred_location) {
+      custom_fields.preffered_location = current_location_id;
+    }
+  }
+  return custom_fields;
+}
+
+function customFieldMultiList(val) {
+  if (Array.isArray(val)) {
+    return val.map((x) => String(x).trim()).filter(Boolean);
+  }
+  return splitMultiValue(val);
+}
+
 /** Map Excel row → teacher API body for fieldsFromTeacherBody(). */
 function bodyFromExcelRow(row) {
+  const newFormat = isNewExcelImportFormat(row);
+
   const contactIdRaw = pickExcelColumn(row, [
+    'roll_no',
+    'roll no',
     'contact id',
     'CONTACT ID',
     'teacher id',
@@ -299,81 +395,151 @@ function bodyFromExcelRow(row) {
   ]);
   const id = parseContactId(contactIdRaw);
 
-  const name = pickExcelColumn(row, ['name', 'NAME']);
+  const name = pickExcelColumn(row, [
+    'teacher_name',
+    'teacher name',
+    'name',
+    'NAME',
+  ]);
   const email = pickExcelColumn(row, ['email', 'EMAIL']);
-  const mobile = pickExcelColumn(row, ['mobile', 'MOBILE', 'phone']);
+  const mobile = pickExcelColumn(row, [
+    'mobile_no',
+    'mobile no',
+    'mobile',
+    'MOBILE',
+    'phone',
+  ]);
   if (!name && !email && !mobile) {
     return null;
   }
+
+  const state_id = pickExcelColumn(row, ['state_id', 'state id']);
+  const city_id = pickExcelColumn(row, ['city_id', 'city id']);
+  const country = pickExcelColumn(row, ['country', 'COUNTRY']);
+  const address = pickExcelColumn(row, ['address', 'ADDRESS']);
+
+  const ugFromColumn = pickExcelColumn(row, [
+    'college_attended_ug',
+    'college attended ug',
+    'ug_college',
+  ]);
+  const pgFromColumn = pickExcelColumn(row, [
+    'universities_attended_pg',
+    'universities attended pg',
+    'pg_university',
+  ]);
 
   const uniRaw = pickExcelColumn(row, [
     'universities / colleges attended',
     'UNIVERSITIES / COLLEGES ATTENDED',
     'universities',
     'colleges attended',
-    'ug_college',
   ]);
-  const { ug_college, pg_university } = universitiesImport(uniRaw);
+  const uniLegacy = universitiesImport(uniRaw);
+  const ug_college = ugFromColumn || uniLegacy.ug_college;
+  const pg_university = pgFromColumn || uniLegacy.pg_university;
 
-  const tags = pickExcelColumn(row, ['tags', 'TAGS', 'skills']);
-  const grades = pickExcelColumn(row, [
-    'grades taught',
-    'GRADES TAUGHT',
-    'grades_taught',
-    'grades',
+  const preferred_location = pickExcelColumn(row, [
+    'preferred_location',
+    'preferred cities',
+    'PREFERRED CITIES',
+    'preferred location',
   ]);
-  const boards = pickExcelColumn(row, [
-    'boards taught',
-    'BOARDS TAUGHT',
-    'boards_taught',
-    'boards',
-  ]);
-  const roles = pickExcelColumn(row, [
+  const rolesRaw = pickExcelColumn(row, [
+    'roles',
+    'ROLES',
     'teacher roles',
     'TEACHER ROLES',
     'teacher_roles',
-    'roles',
   ]);
+  const areasOfInterestRaw = pickExcelColumn(row, [
+    'areas_of_interest',
+    'areas of interest',
+    'area of interest',
+    'AREA OF INTEREST',
+  ]);
+  const current_location_id = pickExcelColumn(row, [
+    'current_location_id',
+    'current location id',
+  ]);
+  const source = pickExcelColumn(row, ['source', 'SOURCE']);
+
+  const tags = pickExcelColumn(row, ['tags', 'TAGS', 'skills']);
+  const grades = pickExcelColumn(row, [
+    'grades_taught',
+    'grades taught',
+    'GRADES TAUGHT',
+    'grades',
+  ]);
+  const boards = pickExcelColumn(row, [
+    'boards_taught',
+    'boards taught',
+    'BOARDS TAUGHT',
+    'boards',
+  ]);
+
+  const custom_fields = buildImportCustomFields({
+    state_id,
+    city_id,
+    preferred_location,
+    rolesRaw: newFormat ? rolesRaw : '',
+    areasOfInterestRaw,
+    current_location_id,
+  });
 
   return {
     ...(id ? { id } : {}),
     name,
     email,
     mobile,
-    city: pickExcelColumn(row, ['city', 'CITY']),
-    preferred_location: pickExcelColumn(row, [
-      'preferred cities',
-      'PREFERRED CITIES',
-      'preferred_location',
-    ]),
+    country,
+    state: pickExcelColumn(row, ['state', 'STATE']) || state_id,
+    city: pickExcelColumn(row, ['city', 'CITY']) || city_id,
+    address,
     ug_college,
     pg_university,
-    qualification: splitMultiValue(
+    preferred_location,
+    current_location: current_location_id,
+    qualifications: splitMultiValue(
       pickExcelColumn(row, [
+        'education_qualifications',
+        'education qualifications',
         'educational qualification',
         'EDUCATIONAL QUALIFICATION',
         'qualification',
+        'qualifications',
       ])
     ),
     subjects_taught: splitMultiValue(
       pickExcelColumn(row, [
+        'subjects_taught',
         'subjects taught',
         'SUBJECTS TAUGHT',
-        'subjects_taught',
         'subject',
       ])
     ),
     skills: splitMultiValue(tags),
     certifications: pickExcelColumn(row, [
+      'qualifications_certificates',
+      'qualifications certificates',
       'qualification certification',
       'QUALIFICATION CERTIFICATION',
       'certifications',
     ]),
     grades_taught: splitMultiValue(grades),
     boards_taught: splitMultiValue(boards),
+    area_of_interest: newFormat
+      ? splitMultiValue(rolesRaw)
+      : splitMultiValue(
+          pickExcelColumn(row, [
+            'area of interest',
+            'AREA OF INTEREST',
+            'area_of_interest',
+          ])
+        ),
+    teacher_roles: newFormat ? [] : splitMultiValue(rolesRaw),
+    where_did_you_hear_about_us: splitMultiValue(source),
     internal_notes: pickExcelColumn(row, ['notes', 'NOTES', 'internal_notes']),
-    teacher_roles: splitMultiValue(roles),
-    state: pickExcelColumn(row, ['state', 'STATE']),
     experience_years: pickExcelColumn(row, [
       'experienceYears',
       'experience_years',
@@ -388,11 +554,13 @@ function bodyFromExcelRow(row) {
       'resume url',
       'resume_url',
     ]),
+    custom_fields,
   };
 }
 
 module.exports = {
   EXCEL_HEADERS,
+  LEGACY_EXCEL_HEADERS,
   EXPORT_EMPTY_ROW,
   teacherRowToExcelExport,
   bodyFromExcelRow,
@@ -400,4 +568,5 @@ module.exports = {
   enrichRowsWithResumeLinks,
   parseResumeImportValue,
   isHttpUrl,
+  isNewExcelImportFormat,
 };
