@@ -1419,6 +1419,27 @@ async function resolveImportResume(body, contactId) {
   return { resume_path: null, resume_original_name: null, imported: false };
 }
 
+async function resolveImportCustomFields(body, contactId, preferredLocation) {
+  let custom_fields = parseCustomFields(body);
+  if (contactId != null && Number.isFinite(contactId) && contactId > 0) {
+    const [rows] = await pool.execute(
+      'SELECT custom_fields FROM teachers WHERE id = ? LIMIT 1',
+      [contactId]
+    );
+    if (rows.length) {
+      custom_fields = {
+        ...parseStoredCustomFields(rows[0].custom_fields),
+        ...custom_fields,
+      };
+    }
+  }
+  const preferred = toStr(preferredLocation);
+  if (preferred) {
+    custom_fields.preffered_location = preferred;
+  }
+  return custom_fields;
+}
+
 async function importTeachersFromExcel(req, res) {
   if (!req.file || !req.file.buffer) {
     return res.status(400).json({
@@ -1487,6 +1508,11 @@ async function importTeachersFromExcel(req, res) {
           body.id != null && String(body.id).trim() !== ''
             ? parseInt(String(body.id), 10)
             : null;
+        f.custom_fields = await resolveImportCustomFields(
+          body,
+          contactId,
+          f.preferred_location
+        );
         const resume = await resolveImportResume(body, contactId);
         if (resume.imported) summary.resumes_set += 1;
 
