@@ -266,7 +266,6 @@ function teacherRowToExcelExport(row) {
   const boards = parseJsonArray(row.boards_taught);
   const grades = parseJsonArray(row.grades_taught);
   const roles = parseJsonArray(row.teacher_roles);
-  const areas = parseJsonArray(row.area_of_interest);
   const skills = parseJsonArray(row.skills);
   const subjects = parseJsonArray(row.subjects_taught);
   const qualifications = parseJsonArray(row.qualifications);
@@ -308,15 +307,14 @@ function teacherRowToExcelExport(row) {
       row.preferred_location ||
       customObj.preffered_location ||
       '',
-    roles:
-      joinList(areas) ||
-      joinList(customFieldMultiList(customObj.areas_of_interest)) ||
-      joinList(roles),
+    roles: joinList(roles),
     current_location_id:
       customObj.current_location_id != null
         ? String(customObj.current_location_id)
         : row.current_location || '',
-    areas_of_interest: joinList(customFieldMultiList(customObj.candidate_roles)),
+    areas_of_interest: joinList(
+      customFieldMultiList(customObj.areas_of_interest)
+    ),
     resume: resumeLabel(row),
   };
 }
@@ -373,7 +371,6 @@ function buildImportCustomFields({
   state_id,
   city_id,
   preferred_location,
-  rolesRaw,
   areasOfInterestRaw,
   current_location_id,
 }) {
@@ -381,10 +378,8 @@ function buildImportCustomFields({
   if (state_id) custom_fields.state_id = state_id;
   if (city_id) custom_fields.city_id = city_id;
   if (preferred_location) custom_fields.preffered_location = preferred_location;
-  const roles = splitMultiValue(rolesRaw);
-  if (roles.length) custom_fields.areas_of_interest = roles;
-  const candidateRoles = splitMultiValue(areasOfInterestRaw);
-  if (candidateRoles.length) custom_fields.candidate_roles = candidateRoles;
+  const areas = splitMultiValue(areasOfInterestRaw);
+  if (areas.length) custom_fields.areas_of_interest = areas;
   if (current_location_id) {
     custom_fields.current_location_id = current_location_id;
     if (!preferred_location) {
@@ -500,7 +495,6 @@ function bodyFromExcelRow(row) {
     state_id,
     city_id,
     preferred_location,
-    rolesRaw: newFormat ? rolesRaw : '',
     areasOfInterestRaw,
     current_location_id,
   });
@@ -547,7 +541,7 @@ function bodyFromExcelRow(row) {
     grades_taught: splitMultiValue(grades),
     boards_taught: splitMultiValue(boards),
     area_of_interest: newFormat
-      ? splitMultiValue(rolesRaw)
+      ? []
       : splitMultiValue(
           pickExcelColumn(row, [
             'area of interest',
@@ -555,7 +549,7 @@ function bodyFromExcelRow(row) {
             'area_of_interest',
           ])
         ),
-    teacher_roles: newFormat ? [] : splitMultiValue(rolesRaw),
+    teacher_roles: splitMultiValue(rolesRaw),
     where_did_you_hear_about_us: splitMultiValue(source),
     internal_notes: pickExcelColumn(row, ['notes', 'NOTES', 'internal_notes']),
     experience_years: pickExcelColumn(row, [
